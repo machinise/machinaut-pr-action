@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output (a compiled GitHub Action ships a bundled dist/, decide at build time)
+# dist/
+
+# Env / secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# Test / coverage
+coverage/
