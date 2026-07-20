@@ -1,0 +1,31 @@
+{
+  "name": "machinaut-pr-action",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitHub Action that posts an agent-authored PR's Lodestar evidence trail as a sticky Machinaut comment (Track C, Increment 1).",
+  "author": "Machinise",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "ncc build src/main.ts -o dist --source-map",
+    "package": "npm run build",
+    "check-dist": "npm run build && git diff --exit-code --stat -- dist/ || (echo '::error::dist/ is out of date — run npm run build and commit' && exit 1)",
+    "all": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vercel/ncc": "^0.38.3",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}
