@@ -4,9 +4,11 @@ A GitHub Action that posts the **Machinaut agent post-mortem** on agent-authored
 *"this PR was written by an agent; here's exactly what it did and why."* Part of
 [Machinaut](https://console.machinaut.ai)'s distribution / PLG work (Track C, build-loop #2).
 
-> **Status: ✅ Increment 1 built — not yet published.** The action is implemented, unit-tested,
-> and verified end-to-end against a stubbed API (create + idempotent update). Remaining before
-> Marketplace publish: a live run on one real agent-authored PR, then flip the repo public.
+> **Status: Increment 1 shipped — `v1` tagged; Marketplace listing pending.** The action is
+> implemented and unit-tested (CI green: typecheck · test · build · check-dist), and verified
+> end-to-end against a **stubbed** API (create + idempotent update). It has **not yet been
+> exercised on a live agent-authored PR** — that run is the remaining validation before calling
+> it battle-tested.
 
 ## What it does
 
