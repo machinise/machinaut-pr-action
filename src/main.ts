@@ -1,6 +1,7 @@
 import * as core from "@actions/core"
 import * as github from "@actions/github"
 import { renderComment, STICKY_MARKER } from "./comment"
+import { type PrPayload, prTargetFromPayload } from "./events"
 import { readInputs } from "./inputs"
 import { fetchSessionReport, MachinautApiError, normalizeBaseUrl } from "./machinaut"
 import { type CommentApi, upsertStickyComment } from "./sticky"
@@ -97,30 +98,22 @@ export function buildSessionUrl(consoleUrl: string, projectId: string, sessionId
 
 /**
  * The PR number for this run: the event payload's PR (pull_request /
- * pull_request_target), else the issue number (issue_comment on a PR), else the
- * PR the head commit belongs to (push / workflow_run / merge_group). Returns
- * undefined when there is genuinely no PR to comment on.
+ * pull_request_target / issue_comment / workflow_run), else the PR the head
+ * commit belongs to (push / merge_group). Returns undefined when there is
+ * genuinely no PR to comment on. Payload → target selection is the pure,
+ * unit-tested {@link prTargetFromPayload}.
  */
 async function resolvePrNumber(octokit: CommentApi): Promise<number | undefined> {
   const ctx = github.context
-  const payload = ctx.payload as {
-    pull_request?: { number?: number; head?: { sha?: string } }
-    issue?: { number?: number; pull_request?: unknown }
-  }
-
-  const fromPr = payload.pull_request?.number
-  if (typeof fromPr === "number") return fromPr
-  // issue_comment on a PR: the issue IS the PR.
-  if (payload.issue?.pull_request && typeof payload.issue.number === "number") return payload.issue.number
-
-  const sha = payload.pull_request?.head?.sha ?? ctx.sha
-  if (!sha) return undefined
+  const target = prTargetFromPayload(ctx.payload as PrPayload, ctx.sha)
+  if (typeof target.prNumber === "number") return target.prNumber
+  if (!target.sha) return undefined
 
   const prs = await octokit
     .paginate<{ number: number; state: string }>(octokit.rest.repos.listPullRequestsAssociatedWithCommit, {
       owner: ctx.repo.owner,
       repo: ctx.repo.repo,
-      commit_sha: sha,
+      commit_sha: target.sha,
       per_page: 100,
     })
     .catch(() => [] as { number: number; state: string }[])

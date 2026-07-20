@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildTeaser, renderComment, STICKY_MARKER } from "../comment"
+import { buildTeaser, renderComment, STICKY_MARKER, type Teaser, teaserNote } from "../comment"
 import type { SessionReport } from "../machinaut"
 
 const REPORT_MD = [
@@ -107,5 +107,49 @@ describe("buildTeaser — bounded verbatim quote", () => {
   it("uses a standard 3-backtick fence for ordinary inline-code content", () => {
     const teaser = buildTeaser("**Events**: `13`")!
     expect(teaser.fenced.startsWith("```md")).toBe(true)
+  })
+
+  it("hard-caps a SINGLE line longer than the char budget (the P2 fix)", () => {
+    // A report that is one giant line: line-dropping can't help (it keeps ≥1 line),
+    // so the quote itself must be cut. Previously this left the teaser unbounded.
+    const giant = `# ${"x".repeat(5000)}`
+    const teaser = buildTeaser(giant)!
+    expect(teaser.truncated).toBe(true)
+    // Bounded well under the source; fence + "md\n" adds only a few chars.
+    expect(teaser.fenced.length).toBeLessThan(1500)
+    expect(teaser.fenced).not.toContain("x".repeat(2000))
+  })
+
+  it("does not truncate a report already under the char budget", () => {
+    const teaser = buildTeaser("# Lodestar trust report\n\n**Events**: 5")!
+    expect(teaser.truncated).toBe(false)
+  })
+})
+
+describe("teaserNote", () => {
+  const base: Teaser = { fenced: "```md\nx\n```", elided: 0, truncated: false }
+
+  it("reports elided whole lines", () => {
+    expect(teaserNote({ ...base, elided: 3 })).toContain("3 more line(s)")
+  })
+
+  it("reports a mid-content truncation when no whole lines were elided", () => {
+    expect(teaserNote({ ...base, elided: 0, truncated: true })).toContain("preview truncated")
+  })
+
+  it("is empty when the quote IS the whole report", () => {
+    expect(teaserNote(base)).toBe("")
+  })
+})
+
+describe("renderComment with an oversized single-line report", () => {
+  it("stays bounded and discloses the truncation", () => {
+    const giant = `# ${"y".repeat(8000)}`
+    const body = renderComment({
+      report: { projection: { event_count: 1, actor_ids: [], actions: [] }, report_markdown: giant },
+      sessionUrl: SESSION_URL,
+    })
+    expect(body).toContain("preview truncated")
+    expect(body.length).toBeLessThan(3000) // nowhere near the 8000-char line
   })
 })

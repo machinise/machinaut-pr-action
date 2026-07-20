@@ -63,9 +63,10 @@ export function renderComment({ report, sessionUrl }: RenderInput): string {
     parts.push("<summary>Report preview — quoted verbatim from the Lodestar report</summary>")
     parts.push("")
     parts.push(teaser.fenced)
-    if (teaser.elided > 0) {
+    const note = teaserNote(teaser)
+    if (note) {
       parts.push("")
-      parts.push(`_…${teaser.elided} more line(s) in the full report — open the session above._`)
+      parts.push(note)
     }
     parts.push("</details>")
   }
@@ -101,6 +102,8 @@ export interface Teaser {
   fenced: string
   /** How many report lines were omitted below the quoted slice. */
   elided: number
+  /** True when the quote itself was hard-cut mid-content to honour the char cap. */
+  truncated: boolean
 }
 
 /**
@@ -128,11 +131,34 @@ export function buildTeaser(markdown: string | undefined): Teaser | undefined {
     sliced = sliced.slice(0, -1)
   }
 
-  const quoted = sliced.join("\n")
+  let quoted = sliced.join("\n")
   const elided = Math.max(0, allLines.length - sliced.length)
+
+  // Line-dropping keeps at least one line, so a single line longer than the cap
+  // (e.g. a huge tool-output line in the report) would still blow the budget and
+  // could make the comment oversized enough for the GitHub API to reject. Hard-cut
+  // the raw text — still a verbatim prefix quote — and flag it so the note fires.
+  let truncated = false
+  if (quoted.length > TEASER_MAX_CHARS) {
+    quoted = quoted.slice(0, TEASER_MAX_CHARS).replace(/\s+\S*$/, "") // avoid a mid-word cut
+    truncated = true
+  }
+
   const fence = "`".repeat(longestBacktickRun(quoted) + 1)
   const fenced = `${fence}md\n${quoted}\n${fence}`
-  return { fenced, elided }
+  return { fenced, elided, truncated }
+}
+
+/** The italic "there's more" line under the preview, or "" when the quote is the
+ *  whole report. Covers both whole-line elision and a mid-content hard-cut. */
+export function teaserNote(teaser: Teaser): string {
+  if (teaser.elided > 0) {
+    return `_…${teaser.elided} more line(s) in the full report — open the session above._`
+  }
+  if (teaser.truncated) {
+    return "_…preview truncated — open the session above for the full report._"
+  }
+  return ""
 }
 
 /** Longest consecutive run of backticks in `s` (min 2, so the fence is always ≥3). */

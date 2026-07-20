@@ -31861,9 +31861,10 @@ function renderComment({ report, sessionUrl }) {
         parts.push("<summary>Report preview — quoted verbatim from the Lodestar report</summary>");
         parts.push("");
         parts.push(teaser.fenced);
-        if (teaser.elided > 0) {
+        const note = teaserNote(teaser);
+        if (note) {
             parts.push("");
-            parts.push(`_…${teaser.elided} more line(s) in the full report — open the session above._`);
+            parts.push(note);
         }
         parts.push("</details>");
     }
@@ -31910,11 +31911,31 @@ function buildTeaser(markdown) {
     while (sliced.length > 1 && sliced[sliced.length - 1].trim() === "") {
         sliced = sliced.slice(0, -1);
     }
-    const quoted = sliced.join("\n");
+    let quoted = sliced.join("\n");
     const elided = Math.max(0, allLines.length - sliced.length);
+    // Line-dropping keeps at least one line, so a single line longer than the cap
+    // (e.g. a huge tool-output line in the report) would still blow the budget and
+    // could make the comment oversized enough for the GitHub API to reject. Hard-cut
+    // the raw text — still a verbatim prefix quote — and flag it so the note fires.
+    let truncated = false;
+    if (quoted.length > TEASER_MAX_CHARS) {
+        quoted = quoted.slice(0, TEASER_MAX_CHARS).replace(/\s+\S*$/, ""); // avoid a mid-word cut
+        truncated = true;
+    }
     const fence = "`".repeat(longestBacktickRun(quoted) + 1);
     const fenced = `${fence}md\n${quoted}\n${fence}`;
-    return { fenced, elided };
+    return { fenced, elided, truncated };
+}
+/** The italic "there's more" line under the preview, or "" when the quote is the
+ *  whole report. Covers both whole-line elision and a mid-content hard-cut. */
+function teaserNote(teaser) {
+    if (teaser.elided > 0) {
+        return `_…${teaser.elided} more line(s) in the full report — open the session above._`;
+    }
+    if (teaser.truncated) {
+        return "_…preview truncated — open the session above for the full report._";
+    }
+    return "";
 }
 /** Longest consecutive run of backticks in `s` (min 2, so the fence is always ≥3). */
 function longestBacktickRun(s) {
@@ -31931,6 +31952,41 @@ function longestBacktickRun(s) {
         }
     }
     return Math.max(2, longest);
+}
+
+;// CONCATENATED MODULE: ./src/events.ts
+/**
+ * Resolve which PR to comment on from the event payload — pure and unit-tested so
+ * the per-trigger source selection can't regress. Kept out of `main.ts` (which has
+ * an import-time `run()` side effect) so tests can import it cleanly.
+ */
+/**
+ * Decide the comment target from the event payload alone.
+ *
+ * Order:
+ *  1. `pull_request` / `pull_request_target` — the PR number is right there.
+ *  2. `issue_comment` on a PR — the issue *is* the PR.
+ *  3. `workflow_run` — the completed run lists the PR(s) it belongs to; use that.
+ *  4. A head SHA to look up — from `pull_request.head.sha`, else the
+ *     `workflow_run.head_sha`, else `contextSha` (push / merge_group).
+ *
+ * The `workflow_run` cases are the point of this function: on that trigger
+ * `github.context.sha` is the DEFAULT-branch SHA, not the PR head, so using it
+ * would look up the wrong PR (or none). We prefer the run's own PR list / head_sha
+ * and only fall back to `contextSha` for triggers where it is the right commit.
+ */
+function prTargetFromPayload(payload, contextSha) {
+    const fromPr = payload.pull_request?.number;
+    if (typeof fromPr === "number")
+        return { prNumber: fromPr };
+    if (payload.issue?.pull_request && typeof payload.issue.number === "number") {
+        return { prNumber: payload.issue.number };
+    }
+    const runPr = payload.workflow_run?.pull_requests?.find((p) => typeof p.number === "number")?.number;
+    if (typeof runPr === "number")
+        return { prNumber: runPr };
+    const sha = payload.pull_request?.head?.sha ?? payload.workflow_run?.head_sha ?? contextSha;
+    return sha ? { sha } : {};
 }
 
 ;// CONCATENATED MODULE: ./src/inputs.ts
@@ -32073,6 +32129,7 @@ async function upsertStickyComment(octokit, args) {
 
 
 
+
 /**
  * Increment 1 (plan §3): authenticate with the consumer's existing project key,
  * read `GET /v1/projects/:p/sessions/:s?report=1`, and post one sticky comment
@@ -32163,27 +32220,23 @@ function buildSessionUrl(consoleUrl, projectId, sessionId) {
 }
 /**
  * The PR number for this run: the event payload's PR (pull_request /
- * pull_request_target), else the issue number (issue_comment on a PR), else the
- * PR the head commit belongs to (push / workflow_run / merge_group). Returns
- * undefined when there is genuinely no PR to comment on.
+ * pull_request_target / issue_comment / workflow_run), else the PR the head
+ * commit belongs to (push / merge_group). Returns undefined when there is
+ * genuinely no PR to comment on. Payload → target selection is the pure,
+ * unit-tested {@link prTargetFromPayload}.
  */
 async function resolvePrNumber(octokit) {
     const ctx = github.context;
-    const payload = ctx.payload;
-    const fromPr = payload.pull_request?.number;
-    if (typeof fromPr === "number")
-        return fromPr;
-    // issue_comment on a PR: the issue IS the PR.
-    if (payload.issue?.pull_request && typeof payload.issue.number === "number")
-        return payload.issue.number;
-    const sha = payload.pull_request?.head?.sha ?? ctx.sha;
-    if (!sha)
+    const target = prTargetFromPayload(ctx.payload, ctx.sha);
+    if (typeof target.prNumber === "number")
+        return target.prNumber;
+    if (!target.sha)
         return undefined;
     const prs = await octokit
         .paginate(octokit.rest.repos.listPullRequestsAssociatedWithCommit, {
         owner: ctx.repo.owner,
         repo: ctx.repo.repo,
-        commit_sha: sha,
+        commit_sha: target.sha,
         per_page: 100,
     })
         .catch(() => []);
