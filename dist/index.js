@@ -32117,15 +32117,25 @@ async function upsertStickyComment(octokit, args) {
         issue_number: issueNumber,
         per_page: 100,
     });
-    const prior = existing.find((c) => typeof c.body === "string" && c.body.includes(marker));
-    if (prior) {
-        const { data } = await octokit.rest.issues.updateComment({
-            owner,
-            repo,
-            comment_id: prior.id,
-            body,
-        });
-        return { id: data.id, html_url: data.html_url, action: "updated" };
+    // A marker comment planted by a DIFFERENT identity (a stray or adversarial one)
+    // can't be edited by our token — GitHub answers 403 — and a comment deleted
+    // between the list and the update answers 404. Either way it isn't ours to
+    // reuse: skip it and try the next marker comment; if none are editable, create
+    // our own. This keeps exactly one evidence comment even when someone else
+    // planted the marker, and never lets their comment block ours. Any OTHER error
+    // (rate limit, outage, oversized body) is a real failure and is re-thrown so it
+    // reaches run()'s comment-failed handler instead of being masked.
+    const markerComments = existing.filter((c) => typeof c.body === "string" && c.body.includes(marker));
+    for (const prior of markerComments) {
+        try {
+            const { data } = await octokit.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
+            return { id: data.id, html_url: data.html_url, action: "updated" };
+        }
+        catch (err) {
+            if (!isNotEditable(err))
+                throw err;
+            // not ours / already gone — fall through to the next candidate, then create
+        }
     }
     const { data } = await octokit.rest.issues.createComment({
         owner,
@@ -32134,6 +32144,13 @@ async function upsertStickyComment(octokit, args) {
         body,
     });
     return { id: data.id, html_url: data.html_url, action: "created" };
+}
+/** Whether a failed comment update means "this comment isn't ours to edit" (403)
+ *  or "it's gone" (404) — a signal to move on / create — versus a real error
+ *  (rate limit, 5xx, 422 oversized body) that must surface. */
+function isNotEditable(err) {
+    const status = err?.status;
+    return status === 403 || status === 404;
 }
 
 ;// CONCATENATED MODULE: ./src/main.ts
