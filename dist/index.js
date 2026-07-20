@@ -31988,6 +31988,20 @@ function prTargetFromPayload(payload, contextSha) {
     const sha = payload.pull_request?.head?.sha ?? payload.workflow_run?.head_sha ?? contextSha;
     return sha ? { sha } : {};
 }
+/**
+ * Look up the PR a commit belongs to (the open one, else the first).
+ *
+ * Deliberately does NOT swallow API errors: a real failure — bad/insufficient
+ * token, rate limit, GitHub outage — must surface to the caller's
+ * `pr-lookup-failed` handler (and honour `fail-on-error`), not masquerade as
+ * "no PR" and silently skip. A commit genuinely on no PR is not an error — the
+ * API returns an empty list, which maps to `undefined` here.
+ */
+async function findPrNumberForSha(octokit, args) {
+    const prs = await octokit.paginate(octokit.rest.repos.listPullRequestsAssociatedWithCommit, { owner: args.owner, repo: args.repo, commit_sha: args.sha, per_page: 100 });
+    const open = prs.find((p) => p.state === "open") ?? prs[0];
+    return open?.number;
+}
 
 ;// CONCATENATED MODULE: ./src/inputs.ts
 
@@ -32232,16 +32246,9 @@ async function resolvePrNumber(octokit) {
         return target.prNumber;
     if (!target.sha)
         return undefined;
-    const prs = await octokit
-        .paginate(octokit.rest.repos.listPullRequestsAssociatedWithCommit, {
-        owner: ctx.repo.owner,
-        repo: ctx.repo.repo,
-        commit_sha: target.sha,
-        per_page: 100,
-    })
-        .catch(() => []);
-    const open = prs.find((p) => p.state === "open") ?? prs[0];
-    return open?.number;
+    // No `.catch` here: a lookup failure must reach run()'s `pr-lookup-failed`
+    // handler (and honour fail-on-error), not be flattened into a false "no-pr" skip.
+    return findPrNumberForSha(octokit, { owner: ctx.repo.owner, repo: ctx.repo.repo, sha: target.sha });
 }
 function skip(reason, message) {
     core.setOutput("status", `skipped:${reason}`);

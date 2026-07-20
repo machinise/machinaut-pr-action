@@ -48,3 +48,30 @@ export function prTargetFromPayload(payload: PrPayload, contextSha: string | und
   const sha = payload.pull_request?.head?.sha ?? payload.workflow_run?.head_sha ?? contextSha
   return sha ? { sha } : {}
 }
+
+/** The minimal Octokit surface {@link findPrNumberForSha} needs. */
+export interface PrLister {
+  paginate: <T>(route: unknown, params: Record<string, unknown>) => Promise<T[]>
+  rest: { repos: { listPullRequestsAssociatedWithCommit: unknown } }
+}
+
+/**
+ * Look up the PR a commit belongs to (the open one, else the first).
+ *
+ * Deliberately does NOT swallow API errors: a real failure — bad/insufficient
+ * token, rate limit, GitHub outage — must surface to the caller's
+ * `pr-lookup-failed` handler (and honour `fail-on-error`), not masquerade as
+ * "no PR" and silently skip. A commit genuinely on no PR is not an error — the
+ * API returns an empty list, which maps to `undefined` here.
+ */
+export async function findPrNumberForSha(
+  octokit: PrLister,
+  args: { owner: string; repo: string; sha: string },
+): Promise<number | undefined> {
+  const prs = await octokit.paginate<{ number: number; state: string }>(
+    octokit.rest.repos.listPullRequestsAssociatedWithCommit,
+    { owner: args.owner, repo: args.repo, commit_sha: args.sha, per_page: 100 },
+  )
+  const open = prs.find((p) => p.state === "open") ?? prs[0]
+  return open?.number
+}

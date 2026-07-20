@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { prTargetFromPayload } from "../events"
+import { findPrNumberForSha, type PrLister, prTargetFromPayload } from "../events"
 
 const CONTEXT_SHA = "default-branch-sha"
 
@@ -46,5 +46,37 @@ describe("prTargetFromPayload", () => {
 
   it("returns an empty target when there is no PR and no SHA at all", () => {
     expect(prTargetFromPayload({}, undefined)).toEqual({})
+  })
+})
+
+describe("findPrNumberForSha", () => {
+  const lister = (resolve: () => Promise<unknown[]>): PrLister => ({
+    paginate: (async () => resolve()) as PrLister["paginate"],
+    rest: { repos: { listPullRequestsAssociatedWithCommit: {} } },
+  })
+
+  it("returns the open PR's number, preferring it over closed ones", async () => {
+    const octokit = lister(async () => [
+      { number: 3, state: "closed" },
+      { number: 5, state: "open" },
+    ])
+    expect(await findPrNumberForSha(octokit, { owner: "o", repo: "r", sha: "s" })).toBe(5)
+  })
+
+  it("falls back to the first PR when none is open", async () => {
+    const octokit = lister(async () => [{ number: 8, state: "closed" }])
+    expect(await findPrNumberForSha(octokit, { owner: "o", repo: "r", sha: "s" })).toBe(8)
+  })
+
+  it("returns undefined for a commit on no PR (empty list is NOT an error)", async () => {
+    const octokit = lister(async () => [])
+    expect(await findPrNumberForSha(octokit, { owner: "o", repo: "r", sha: "s" })).toBeUndefined()
+  })
+
+  it("propagates API errors instead of swallowing them into a false no-PR (the P2 fix)", async () => {
+    const octokit = lister(async () => {
+      throw new Error("Bad credentials")
+    })
+    await expect(findPrNumberForSha(octokit, { owner: "o", repo: "r", sha: "s" })).rejects.toThrow("Bad credentials")
   })
 })

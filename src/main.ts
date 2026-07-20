@@ -1,7 +1,7 @@
 import * as core from "@actions/core"
 import * as github from "@actions/github"
 import { renderComment, STICKY_MARKER } from "./comment"
-import { type PrPayload, prTargetFromPayload } from "./events"
+import { findPrNumberForSha, type PrPayload, prTargetFromPayload } from "./events"
 import { readInputs } from "./inputs"
 import { fetchSessionReport, MachinautApiError, normalizeBaseUrl } from "./machinaut"
 import { type CommentApi, upsertStickyComment } from "./sticky"
@@ -109,17 +109,9 @@ async function resolvePrNumber(octokit: CommentApi): Promise<number | undefined>
   if (typeof target.prNumber === "number") return target.prNumber
   if (!target.sha) return undefined
 
-  const prs = await octokit
-    .paginate<{ number: number; state: string }>(octokit.rest.repos.listPullRequestsAssociatedWithCommit, {
-      owner: ctx.repo.owner,
-      repo: ctx.repo.repo,
-      commit_sha: target.sha,
-      per_page: 100,
-    })
-    .catch(() => [] as { number: number; state: string }[])
-
-  const open = prs.find((p) => p.state === "open") ?? prs[0]
-  return open?.number
+  // No `.catch` here: a lookup failure must reach run()'s `pr-lookup-failed`
+  // handler (and honour fail-on-error), not be flattened into a false "no-pr" skip.
+  return findPrNumberForSha(octokit, { owner: ctx.repo.owner, repo: ctx.repo.repo, sha: target.sha })
 }
 
 function skip(reason: string, message: string): void {
