@@ -86,6 +86,18 @@ are the exact devs already in your tenant.
   swap the console link for a real public `/s/:token` share so an unauthenticated onlooker can
   click through. That's a backend slice tracked in the control-plane plan.
 
+## Versioning
+
+Releases follow [SemVer](https://semver.org/) and are tagged `vMAJOR.MINOR.PATCH`.
+
+- **Pin the major alias** — `machinise/machinaut-pr-action@v1` — to pick up fixes
+  automatically. A release workflow re-points `v1` at each new `v1.x.y`.
+- **Pin an exact tag** (`@v1.0.0`) or a commit SHA if you want fully reproducible runs.
+
+Because a runner executes the committed `dist/` bundle directly, the release workflow
+refuses to move the major alias when the tagged tree's `dist/` is out of date.
+See [CHANGELOG.md](./CHANGELOG.md).
+
 ## Development
 
 ```bash

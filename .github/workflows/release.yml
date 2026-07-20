@@ -1,0 +1,75 @@
+# Keeps the moving major-version alias (`v1`) pointing at the newest `v1.x.y`
+# release, so consumers can pin `machinise/machinaut-pr-action@v1` and get fixes.
+#
+# Runs on a published release; `workflow_dispatch` lets a maintainer re-point the
+# alias at an existing tag by hand. The alias is only moved AFTER the released
+# tree is re-verified — a runner executes the committed `dist/` bundle directly,
+# so a release whose `dist/` is stale would ship broken code to every consumer.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to alias (e.g. v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  major-tag:
+    name: Verify the tag, then move its major alias
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history + tags so we can re-point an annotated tag.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check out the released tag
+        env:
+          # Read through env, never interpolated into the script: a tag name is
+          # attacker-influencable input and `${{ }}` inside `run:` is injectable.
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$TAG' is not a vMAJOR.MINOR.PATCH tag — refusing to alias it"
+            exit 1
+          fi
+          git checkout --quiet "refs/tags/$TAG"
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Refuse to release a stale dist/
+        run: |
+          set -euo pipefail
+          npm run build
+          if [ -n "$(git status --porcelain -- dist/)" ]; then
+            echo "::error::dist/ at this tag is out of date — consumers run dist/index.js directly"
+            git --no-pager diff --stat -- dist/
+            exit 1
+          fi
+
+      - name: Move the major alias
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          MAJOR="${TAG%%.*}"   # v1.2.3 -> v1
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f "$MAJOR" "refs/tags/$TAG"
+          git push -f origin "refs/tags/$MAJOR"
+          echo "::notice::$MAJOR now points at $TAG"

@@ -1,9 +1,9 @@
 name: 'Machinaut PR evidence comment'
 description: >-
-  Post the agent's Lodestar evidence trail on a PR as one sticky comment — a
-  verdict teaser plus a deep link to the Machinaut console session. Increment 1:
-  read-only, login-walled console link (not a public post-mortem). Reads
-  GET /v1/projects/:p/sessions/:s?report=1 with your existing project key.
+  Post an agent-authored PR's evidence trail as one sticky comment: a verdict
+  teaser quoted from the Lodestar trust report, plus a deep link to the session
+  in Machinaut. Read-only — it uses your existing project key and links to your
+  team's console (sign-in required), never to a public page.
 author: 'Machinise'
 
 branding:
@@ -14,9 +14,9 @@ inputs:
   machinaut-api-key:
     description: >-
       Your Machinaut project API key, supplied as a repo secret. Used read-only
-      here (the action calls GET /v1/projects/:p/sessions/:s?report=1). This is
-      NOT a publish credential — a project key cannot mint a public share by
-      design, so Increment 1 only ever links to the login-walled console.
+      (the action calls GET /v1/projects/:p/sessions/:s?report=1). This is NOT a
+      publish credential — a project key cannot mint a public share by design,
+      which is why the comment links to your sign-in-walled team console.
     required: true
   project-id:
     description: 'The Machinaut project id the shipped session belongs to.'
@@ -24,9 +24,9 @@ inputs:
   session-id:
     description: >-
       The Lodestar session id your CI just shipped (export it from your
-      `lodestar ship` step — see examples/). When empty, the action no-ops:
-      the presence of a shipped session is the signal that a PR is
-      agent-authored (plan D1/D2), so no session means nothing to post.
+      `lodestar ship` step — see examples/). When empty, the action cleanly
+      no-ops: a shipped session is what marks a PR as agent-authored, so no
+      session means there is nothing to post — no heuristics, no false positives.
     required: true
   api-url:
     description: >-
