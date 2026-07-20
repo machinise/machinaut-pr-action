@@ -105,7 +105,7 @@ export function buildSessionUrl(consoleUrl: string, projectId: string, sessionId
  */
 async function resolvePrNumber(octokit: CommentApi): Promise<number | undefined> {
   const ctx = github.context
-  const target = prTargetFromPayload(ctx.payload as PrPayload, ctx.sha)
+  const target = prTargetFromPayload(ctx.payload as PrPayload, ctx.sha, ctx.eventName)
   if (typeof target.prNumber === "number") return target.prNumber
   if (!target.sha) return undefined
 

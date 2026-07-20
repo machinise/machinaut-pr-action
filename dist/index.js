@@ -31961,21 +31961,31 @@ function longestBacktickRun(s) {
  * an import-time `run()` side effect) so tests can import it cleanly.
  */
 /**
+ * Events on which `github.context.sha` is genuinely the PR/branch head commit,
+ * so looking a PR up from it is sound. On every OTHER event (`issue_comment` on a
+ * plain issue, `workflow_dispatch`, `schedule`, …) `context.sha` is the
+ * default-branch commit — using it could resolve an *unrelated* PR (e.g. one whose
+ * head happens to be the branch tip) and post the evidence comment there. So the
+ * bare-`contextSha` fallback is limited to this set; other events skip instead.
+ */
+const CONTEXT_SHA_EVENTS = new Set(["push", "merge_group"]);
+/**
  * Decide the comment target from the event payload alone.
  *
  * Order:
  *  1. `pull_request` / `pull_request_target` — the PR number is right there.
  *  2. `issue_comment` on a PR — the issue *is* the PR.
  *  3. `workflow_run` — the completed run lists the PR(s) it belongs to; use that.
- *  4. A head SHA to look up — from `pull_request.head.sha`, else the
- *     `workflow_run.head_sha`, else `contextSha` (push / merge_group).
+ *  4. A trustworthy head SHA to look up — `pull_request.head.sha` or
+ *     `workflow_run.head_sha` (always a real head), else `contextSha` but ONLY on
+ *     events where it is the head commit ({@link CONTEXT_SHA_EVENTS}).
  *
- * The `workflow_run` cases are the point of this function: on that trigger
- * `github.context.sha` is the DEFAULT-branch SHA, not the PR head, so using it
- * would look up the wrong PR (or none). We prefer the run's own PR list / head_sha
- * and only fall back to `contextSha` for triggers where it is the right commit.
+ * The SHA-source discipline is the point of this function: on `workflow_run` and
+ * on non-PR events `github.context.sha` is the DEFAULT-branch SHA, so using it
+ * unconditionally would look up the wrong PR (or none). We prefer the payload's
+ * own head SHA and gate the bare `contextSha` fallback by event type.
  */
-function prTargetFromPayload(payload, contextSha) {
+function prTargetFromPayload(payload, contextSha, eventName) {
     const fromPr = payload.pull_request?.number;
     if (typeof fromPr === "number")
         return { prNumber: fromPr };
@@ -31985,7 +31995,11 @@ function prTargetFromPayload(payload, contextSha) {
     const runPr = payload.workflow_run?.pull_requests?.find((p) => typeof p.number === "number")?.number;
     if (typeof runPr === "number")
         return { prNumber: runPr };
-    const sha = payload.pull_request?.head?.sha ?? payload.workflow_run?.head_sha ?? contextSha;
+    // A head SHA from the payload is always a real PR/branch head; the bare
+    // context SHA is only trustworthy on the events above.
+    const headSha = payload.pull_request?.head?.sha ?? payload.workflow_run?.head_sha;
+    const gatedContextSha = eventName !== undefined && CONTEXT_SHA_EVENTS.has(eventName) ? contextSha : undefined;
+    const sha = headSha ?? gatedContextSha;
     return sha ? { sha } : {};
 }
 /**
@@ -32258,7 +32272,7 @@ function buildSessionUrl(consoleUrl, projectId, sessionId) {
  */
 async function resolvePrNumber(octokit) {
     const ctx = github.context;
-    const target = prTargetFromPayload(ctx.payload, ctx.sha);
+    const target = prTargetFromPayload(ctx.payload, ctx.sha, ctx.eventName);
     if (typeof target.prNumber === "number")
         return target.prNumber;
     if (!target.sha)
