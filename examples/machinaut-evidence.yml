@@ -1,0 +1,44 @@
+# Example: post the Machinaut evidence comment on agent-authored PRs.
+#
+# Drop this in the CONSUMER repo at `.github/workflows/machinaut-evidence.yml`.
+# The trigger (plan D1) is simply "a Lodestar session was shipped for this run":
+# your agent step ships its session to Machinaut and exports the id, and this
+# action no-ops on runs where nothing was shipped (empty session-id).
+#
+# Store your Machinaut project key as the `MACHINAUT_API_KEY` repo secret. It is
+# used read-only here — a project key cannot mint a public share by design, so
+# Increment 1 only ever links to the login-walled console.
+
+name: Machinaut evidence
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write # required so the action can post/update the sticky comment
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Your agent runs and ships its Lodestar session to Machinaut.
+      #    However your pipeline produces the session id, export it as a step
+      #    output named `session-id`. (Illustrative — use your real ship command.)
+      - id: ship
+        env:
+          MACHINAUT_API_KEY: ${{ secrets.MACHINAUT_API_KEY }}
+        run: |
+          # ... run the agent, then ship the session it just produced ...
+          # e.g. `lodestar ship "$SESSION_ID"` — then surface the id:
+          echo "session-id=$SESSION_ID" >> "$GITHUB_OUTPUT"
+
+      # 2) Post the evidence comment. On runs where nothing shipped,
+      #    session-id is empty and the action cleanly no-ops.
+      - uses: machinise/machinaut-pr-action@v1
+        with:
+          machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
+          project-id: your-project-id
+          session-id: ${{ steps.ship.outputs.session-id }}
+          # api-url: https://console.machinaut.ai   # self-hosted? point at your control plane

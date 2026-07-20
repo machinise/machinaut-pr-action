@@ -1,0 +1,71 @@
+name: 'Machinaut PR evidence comment'
+description: >-
+  Post the agent's Lodestar evidence trail on a PR as one sticky comment — a
+  verdict teaser plus a deep link to the Machinaut console session. Increment 1:
+  read-only, login-walled console link (not a public post-mortem). Reads
+  GET /v1/projects/:p/sessions/:s?report=1 with your existing project key.
+author: 'Machinise'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  machinaut-api-key:
+    description: >-
+      Your Machinaut project API key, supplied as a repo secret. Used read-only
+      here (the action calls GET /v1/projects/:p/sessions/:s?report=1). This is
+      NOT a publish credential — a project key cannot mint a public share by
+      design, so Increment 1 only ever links to the login-walled console.
+    required: true
+  project-id:
+    description: 'The Machinaut project id the shipped session belongs to.'
+    required: true
+  session-id:
+    description: >-
+      The Lodestar session id your CI just shipped (export it from your
+      `lodestar ship` step — see examples/). When empty, the action no-ops:
+      the presence of a shipped session is the signal that a PR is
+      agent-authored (plan D1/D2), so no session means nothing to post.
+    required: true
+  api-url:
+    description: >-
+      Base origin of your Machinaut deployment — used for the API call and, by
+      default, the console deep link. Defaults to the hosted control plane.
+    required: false
+    default: 'https://console.machinaut.ai'
+  console-url:
+    description: >-
+      Base origin for the console deep link, when it differs from `api-url`
+      (e.g. a split API/console deploy). Defaults to `api-url`.
+    required: false
+    default: ''
+  github-token:
+    description: >-
+      Token used to create/update the sticky PR comment. The default job token
+      works when the job has `pull-requests: write` permission.
+    required: false
+    default: ${{ github.token }}
+  fail-on-error:
+    description: >-
+      When 'false' (default), any problem (empty session, no PR, API or comment
+      failure) logs a warning and exits successfully, so a non-critical evidence
+      comment never turns a PR check red. Set 'true' to fail the job on error.
+    required: false
+    default: 'false'
+
+outputs:
+  comment-id:
+    description: 'Numeric id of the created/updated sticky comment (empty if skipped).'
+  comment-url:
+    description: 'html_url of the sticky comment (empty if skipped).'
+  session-url:
+    description: 'The console deep link to the session (empty if not resolvable).'
+  status:
+    description: >-
+      One of `created`, `updated`, or `skipped:<reason>` — machine-readable
+      outcome for downstream steps.
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'

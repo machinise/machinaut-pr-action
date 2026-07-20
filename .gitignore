@@ -1,8 +1,10 @@
 # Dependencies
 node_modules/
 
-# Build output (a compiled GitHub Action ships a bundled dist/, decide at build time)
-# dist/
+# Build output: a compiled GitHub Action ships a bundled dist/, so dist/ IS
+# committed (a runner executes dist/index.js directly). CI's check-dist step
+# keeps it in sync with src/. The intermediate tsc dir is not committed.
+dist-tsc/
 
 # Env / secrets — never commit
 .env
