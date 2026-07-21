@@ -7,23 +7,9 @@ Notable changes to this action. Format follows
 
 ## [Unreleased]
 
-### Added
+_Nothing yet._
 
-- Release workflow that re-points the `v1` major alias at each published
-  `v1.x.y` release — and refuses to do so if the tagged tree's `dist/` bundle is
-  stale, since consumers execute `dist/index.js` directly.
-- Dependabot for the workflows' actions and for npm dependencies.
-- This changelog.
-
-### Changed
-
-- Marketplace-facing copy in `action.yml` (the listing blurb and input help) no
-  longer uses internal roadmap jargon, while keeping the sign-in-walled framing
-  explicit.
-- CI now uses `actions/checkout@v7` / `actions/setup-node@v7`, clearing the
-  Node 20 deprecation warning.
-
-## [1.0.0] - 2026-07-20
+## [1.0.0] - 2026-07-21
 
 Tagged (`v1.0.0`, aliased by `v1`), but **not yet listed on the GitHub
 Marketplace** and **not yet exercised against a production Machinaut control
@@ -49,6 +35,17 @@ validation.
 - Outputs: `comment-id`, `comment-url`, `session-url`, `status`.
 - `fail-on-error` defaults to `false` so a non-critical evidence comment never
   turns a PR check red; genuine failures are still surfaced as warnings.
+
+### Release tooling
+
+- Release workflow that re-points the `v1` major alias at each published
+  `v1.x.y` release — and refuses to do so if the tagged tree's `dist/` bundle is
+  stale, since consumers execute `dist/index.js` directly.
+- Dependabot for the workflows' actions and for npm dependencies.
+- CI runs on `actions/checkout@v7` / `actions/setup-node@v7` (no Node 20
+  deprecation warning).
+- Marketplace-facing copy in `action.yml` avoids internal roadmap jargon while
+  keeping the sign-in-walled framing explicit.
 
 ### Notes
 
