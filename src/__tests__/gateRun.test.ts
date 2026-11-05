@@ -442,8 +442,8 @@ describe("runGate — attestation intake never changes the gate", () => {
 
   for (const [status, intake, text] of [
     [404, "not_available", "not available on this console"],
-    [401, "rejected", "rejected (http_401)"],
-    [403, "rejected", "rejected (http_403)"],
+    [401, "rejected", "rejected (http\\_401)"],
+    [403, "rejected", "rejected (http\\_403)"],
     [413, "rejected", "rejected (too\\_large)"],
     [500, "failed", "failed (HTTP 500)"],
   ] as const) {
