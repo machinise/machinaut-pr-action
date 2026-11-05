@@ -219,7 +219,19 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
   for (const n of result.notes) core.notice(`${CHECK_NAME}: ${n}`)
 
   // 3. Statement — written to disk whether or not it is signed.
-  const statement = buildStatement({ owner, repo, headSha, summary, policy, decision: result.decision, reasons: result.reasons })
+  const statement = buildStatement({
+    owner,
+    repo,
+    headSha,
+    summary,
+    policy,
+    decision: result.decision,
+    reasons: result.reasons,
+    actionInvocation: {
+      ref: deps.env.GITHUB_ACTION_REF || undefined,
+      repository: deps.env.GITHUB_ACTION_REPOSITORY || undefined,
+    },
+  })
   // One directory PER INVOCATION: two gate steps in a job (e.g. two policies for
   // one session) must not overwrite each other's signed evidence behind their outputs.
   const invocation = `${safeSegment(inputs.sessionId)}-${(deps.uniqueId ?? randomUUID)()}`
@@ -296,7 +308,17 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
 
   // 5. Verdict comment (sticky, updated in place).
   await postComment(
-    renderGateComment({ summary, result, policy, dryRun: inputs.dryRun, headSha, sessionUrl, attestation, intake }),
+    renderGateComment({
+      summary,
+      result,
+      policy,
+      dryRun: inputs.dryRun,
+      headSha,
+      sessionUrl,
+      attestation,
+      intake,
+      verify: { repo: `${owner}/${repo}`, signerWorkflow: signerWorkflowFromEnv(deps.env) },
+    }),
   )
 
   // 6. The check itself.
@@ -333,6 +355,14 @@ async function resolvePrAndHead(
 async function defaultWriteFile(path: string, data: string): Promise<void> {
   await mkdir(join(path, ".."), { recursive: true })
   await writeFile(path, data, "utf8")
+}
+
+/** `owner/repo/.github/workflows/x.yml` from GITHUB_WORKFLOW_REF (`…@refs/heads/main` stripped). */
+function signerWorkflowFromEnv(env: Record<string, string | undefined>): string | undefined {
+  const ref = env.GITHUB_WORKFLOW_REF
+  if (!ref) return undefined
+  const at = ref.lastIndexOf("@refs/")
+  return at === -1 ? ref : ref.slice(0, at)
 }
 
 /** A session id as a single safe path segment. */

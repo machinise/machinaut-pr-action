@@ -12,7 +12,7 @@ A GitHub Action that posts the **Machinaut agent post-mortem** on agent-authored
 >
 > **[Gate mode](#gate-mode-beta) — beta, unreleased (intended `v2`):** evaluate a run's governance
 > facts against your policy, sign the decision with your CI's Sigstore identity, and fail a
-> required check. Not yet run against a live control plane.
+> required check. First live run: see [below](#first-live-run-2026-11-06).
 
 ## What it does
 
@@ -218,7 +218,12 @@ predicate type `https://machinaut.ai/attestation/governed-run/v1`:
   ids, `as_of`), `chain` (event counts, redacted commitments, `chain_digest`, seq bounds), `holds[]`
   (request id, ADR-0042 hash, outcome, evidence, ADR-0041 quorum `k`/`m`/`record_digest`),
   `holds_truncated`, `sentinels` (counts by severity), `unreadable` (counts) — plus a `gate` block
-  written by this action: `action`, `policy`, `decision`, `reasons`.
+  written by this action: `action` (this build's release version, e.g.
+  `machinise/machinaut-pr-action@v2.0.0`), `action_ref` (`GITHUB_ACTION_REF` — how the action was
+  actually invoked: a tag, branch or bare SHA; omitted when GitHub does not set it),
+  `action_repository` (`GITHUB_ACTION_REPOSITORY`; omitted when unset), `policy`, `decision`,
+  `reasons`. `action` states the version the build claims; `action_ref` states what was really
+  pinned — they differ when the action is invoked by SHA.
 - **Privacy:** digests, ids, counts, enums and timestamps only — never payloads, prompts, approval
   reason text or actor names. Unknown fields in the summary are dropped before signing (and logged;
   the summary's own `beta: true` endpoint label is ignored silently),
@@ -252,6 +257,19 @@ gh attestation verify machinaut-governance-summary.json --repo <owner>/<repo> \
   (from a bundle: `jq -r .dsseEnvelope.payload governed-run.sigstore.json | base64 -d | jq -cjS '.predicate | del(.gate)'`).
 - **The facts re-derive too:** `chain_digest` is recomputable from your own local NDJSON; the recipe
   lives in the control-plane reference docs alongside the `/governance` route.
+
+When the run is signed, the sticky comment carries this same recipe as one fenced line (with your
+repo and workflow filled in) and names the `machinaut-governance-summary.json` file in the
+`machinaut-governed-run` artifact to verify.
+
+### First live run (2026-11-06)
+
+Gate mode has now run against a live Machinaut control plane: test
+[PR #9](https://github.com/machinise/machinaut-pr-action/pull/9) (dry run
+`42055217054`, signed run `42055483871`), with the
+[attestation](https://github.com/machinise/machinaut-pr-action/attestations/64097467) stored in
+GitHub. The decision was `fail` because the demo session's hold is unresolved — an honest result,
+not a bug. Gate mode remains **beta**.
 
 ### What the gate is *not*
 

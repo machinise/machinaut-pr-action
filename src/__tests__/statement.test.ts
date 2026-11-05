@@ -34,6 +34,18 @@ describe("buildStatement — in-toto Statement v1, governed-run/v1 predicate", (
     expect(st.subject[0]).toEqual({ name: "acme/widgets", digest: { gitCommit: HEAD_SHA } })
   })
 
+  it("records the invocation facts GitHub provides, and omits them when absent", () => {
+    const withRef = buildStatement(
+      input({ actionInvocation: { ref: "49dcb11aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", repository: "machinise/machinaut-pr-action" } }),
+    )
+    expect(withRef.predicate.gate.action).toBe(ACTION_REF)
+    expect(withRef.predicate.gate.action_ref).toBe("49dcb11aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    expect(withRef.predicate.gate.action_repository).toBe("machinise/machinaut-pr-action")
+    const bare = buildStatement(input())
+    expect("action_ref" in bare.predicate.gate).toBe(false)
+    expect("action_repository" in bare.predicate.gate).toBe(false)
+  })
+
   it("adds the evaluated summary as a sha256 subject so `gh attestation verify <file>` can find and match it", () => {
     const st = buildStatement(input())
     const expectedHex = createHash("sha256").update(summaryDocument(summary())).digest("hex")

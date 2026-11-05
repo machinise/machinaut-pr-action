@@ -30,6 +30,31 @@ function render(overrides: Partial<GateCommentInput> = {}): string {
 }
 
 describe("renderGateComment", () => {
+  const RECIPE =
+    "gh attestation verify machinaut-governance-summary.json --repo acme/widgets " +
+    "--predicate-type https://machinaut.ai/attestation/governed-run/v1 " +
+    "--signer-workflow acme/widgets/.github/workflows/governed-run.yml"
+  const verify = { repo: "acme/widgets", signerWorkflow: "acme/widgets/.github/workflows/governed-run.yml" }
+
+  it("includes the exact verify recipe (one line) when signed, incl. signed-not-stored", () => {
+    for (const attestation of [{ kind: "signed" as const }, { kind: "signed" as const, storeError: "HTTP 403" }]) {
+      const body = render({ attestation, verify })
+      const expected = attestation.storeError ? `${RECIPE} --bundle governed-run.sigstore.json` : RECIPE
+      expect(body).toContain(`\`\`\`bash\n${expected}\n\`\`\``)
+      expect(body).toContain("`machinaut-governed-run` artifact")
+    }
+  })
+
+  it("shell-quotes an unusual workflow path", () => {
+    const body = render({ verify: { repo: "acme/widgets", signerWorkflow: "acme/widgets/.github/workflows/a b$(x).yml" } })
+    expect(body).toContain("--signer-workflow 'acme/widgets/.github/workflows/a b$(x).yml'")
+  })
+
+  it("omits the verify recipe when unsigned or failed", () => {
+    expect(render({ attestation: { kind: "skipped", reason: "dry-run", detail: "x" }, verify })).not.toContain("gh attestation verify")
+    expect(render({ attestation: { kind: "failed", message: "x" }, verify })).not.toContain("gh attestation verify")
+  })
+
   it("uses its own sticky marker, distinct from comment mode's in both directions", () => {
     const body = render()
     expect(body.startsWith(GATE_STICKY_MARKER)).toBe(true)
