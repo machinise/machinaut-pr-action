@@ -78950,6 +78950,151 @@ function pushCapped(into, items, overflow) {
         into.push(overflow(items.length - MAX_HOLD_REASONS));
 }
 
+;// CONCATENATED MODULE: ./src/version.ts
+/**
+ * This build's release version, recorded in every governed-run statement as
+ * `gate.action` (plan §2.2). Bump it in the same commit that prepares a release:
+ * the release workflow refuses to alias a tag whose version does not match.
+ */
+const ACTION_VERSION = "2.0.0";
+const ACTION_REPOSITORY = "machinise/machinaut-pr-action";
+const ACTION_REF = `${ACTION_REPOSITORY}@v${ACTION_VERSION}`;
+
+;// CONCATENATED MODULE: ./src/statement.ts
+
+
+/**
+ * The in-toto Statement v1 this action signs (plan §2.2, D3).
+ *
+ * Built field-for-field the way `@actions/attest` builds it
+ * (`{_type, subject, predicateType, predicate}`), so the file written to
+ * `statement-path` is byte-identical to the payload the toolkit signs.
+ */
+const STATEMENT_TYPE = "https://in-toto.io/Statement/v1";
+const PREDICATE_TYPE = "https://machinaut.ai/attestation/governed-run/v1";
+/** File name of the evidence-document subject (see {@link buildSubjects}). */
+const SUMMARY_SUBJECT_NAME = "machinaut-governance-summary.json";
+/**
+ * Canonical JSON: object keys sorted (UTF-16 code-unit order, i.e. plain ASCII
+ * order for every key this predicate has), no whitespace. Reproducible by an
+ * auditor with `jq -cjS` — see the README's verification recipe.
+ */
+function canonicalJson(value) {
+    return JSON.stringify(sortKeys(value));
+}
+function sortKeys(value) {
+    if (Array.isArray(value))
+        return value.map(sortKeys);
+    if (value !== null && typeof value === "object") {
+        const out = {};
+        for (const k of Object.keys(value).sort()) {
+            out[k] = sortKeys(value[k]);
+        }
+        return out;
+    }
+    return value;
+}
+/** The bytes of the evidence-document subject: the canonical summary. */
+function summaryDocument(summary) {
+    return canonicalJson(summary);
+}
+function sha256Hex(s) {
+    return (0,external_node_crypto_.createHash)("sha256").update(s, "utf8").digest("hex");
+}
+/**
+ * Subjects, in a fixed order:
+ *  1. **The PR head commit** — `{name: "<owner>/<repo>", digest: {gitCommit}}` (D3).
+ *     This is what the gate is about.
+ *  2. **The evidence document the gate evaluated** — sha256 of the canonical
+ *     governance summary, written next to the bundle as
+ *     `machinaut-governance-summary.json`. GitHub's attestation store and
+ *     `gh attestation verify` look attestations up by an artifact's sha256 and
+ *     cannot match a `gitCommit`-only subject, so this second subject is what
+ *     lets `gh attestation verify <summary file> --repo … --predicate-type …`
+ *     work with no Machinaut involvement. It adds no new data: the same summary
+ *     is the predicate (minus `gate`).
+ */
+function buildSubjects(input) {
+    return [
+        { name: `${input.owner}/${input.repo}`, digest: { gitCommit: input.headSha } },
+        { name: SUMMARY_SUBJECT_NAME, digest: { sha256: sha256Hex(summaryDocument(input.summary)) } },
+    ];
+}
+/**
+ * Build the governed-run Statement. Pure and deterministic: the same input
+ * always serialises to the same bytes (key order is fixed by construction).
+ *
+ * The predicate is the summary (already projected onto the frozen
+ * `governance_summary@1` shape by `parseGovernanceSummary`) plus the `gate`
+ * block this action wrote. {@link assertPredicatePrivacy} re-checks, at runtime,
+ * that nothing outside that shape slipped in.
+ */
+function buildStatement(input) {
+    const { summary } = input;
+    const predicate = {
+        machinaut: summary.machinaut,
+        chain: summary.chain,
+        holds: summary.holds,
+        holds_truncated: summary.holds_truncated,
+        sentinels: summary.sentinels,
+        unreadable: summary.unreadable,
+        gate: {
+            action: input.actionRef ?? ACTION_REF,
+            ...(input.actionInvocation?.ref ? { action_ref: input.actionInvocation.ref } : {}),
+            ...(input.actionInvocation?.repository ? { action_repository: input.actionInvocation.repository } : {}),
+            policy: input.policy,
+            decision: input.decision,
+            reasons: input.reasons,
+        },
+    };
+    assertPredicatePrivacy(predicate);
+    return {
+        _type: STATEMENT_TYPE,
+        subject: buildSubjects(input),
+        predicateType: PREDICATE_TYPE,
+        predicate,
+    };
+}
+/** Every key the predicate may carry. The statement is published to a public
+ *  transparency log, so anything else — a payload, a prompt, an approver's reason
+ *  text, an actor name — is a bug, and signing must stop. */
+const ALLOWED_PREDICATE_KEYS = new Set([
+    // machinaut
+    "machinaut", "console", "project_id", "session_id", "summary_version", "as_of",
+    // chain
+    "chain", "events", "readable", "redacted_commitments", "chain_digest", "first_seq", "last_seq",
+    // holds
+    "holds", "request_id", "action_representation_hash", "outcome", "evidence", "quorum", "k", "m", "record_digest",
+    "holds_truncated",
+    // sentinels
+    "sentinels", "info", "warning", "critical",
+    // what the shipper withheld (counts only)
+    "unreadable", "approval_requests", "sentinel_alerts",
+    // gate (written by this action)
+    "gate", "action", "action_ref", "action_repository", "policy", "require_holds_resolved", "require_bound_approvals", "max_sentinel_severity",
+    "allow_unreadable", "decision", "reasons",
+]);
+class PredicatePrivacyError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = "PredicatePrivacyError";
+    }
+}
+function assertPredicatePrivacy(predicate, path = "predicate") {
+    if (Array.isArray(predicate)) {
+        predicate.forEach((v, i) => assertPredicatePrivacy(v, `${path}[${i}]`));
+        return;
+    }
+    if (predicate !== null && typeof predicate === "object") {
+        for (const [k, v] of Object.entries(predicate)) {
+            if (!ALLOWED_PREDICATE_KEYS.has(k)) {
+                throw new PredicatePrivacyError(`refusing to sign: ${path}.${k} is not a governed-run/v1 predicate field`);
+            }
+            assertPredicatePrivacy(v, `${path}.${k}`);
+        }
+    }
+}
+
 ;// CONCATENATED MODULE: ./src/signing.ts
 
 function planSigning(args) {
@@ -79048,6 +79193,7 @@ function errMessage(err) {
 
 ;// CONCATENATED MODULE: ./src/gateComment.ts
 
+
 /**
  * The gate's sticky comment. A separate marker from comment mode's, so a repo
  * that runs both modes keeps one evidence comment AND one verdict comment rather
@@ -79073,6 +79219,13 @@ const CANDOR_LINES = [
         `are [Lodestar](${gateComment_LODESTAR_URL}) OSS. GitHub enforces this check through your branch protection — ` +
         "Machinaut cannot block a merge.",
 ];
+/** The artifact the example workflow uploads the evidence files as. */
+const EVIDENCE_ARTIFACT = "machinaut-governed-run";
+/** One line; the same text the console shows as `verify_recipe`. */
+function verifyRecipe(repo, signerWorkflow = "<owner>/<repo>/.github/workflows/<workflow>.yml") {
+    return (`gh attestation verify ${SUMMARY_SUBJECT_NAME} --repo ${repo} --predicate-type ${PREDICATE_TYPE} ` +
+        `--signer-workflow ${signerWorkflow}`);
+}
 function renderGateComment(input) {
     const { summary, result, dryRun } = input;
     const parts = [GATE_STICKY_MARKER, headline(result, dryRun), ""];
@@ -79102,6 +79255,14 @@ function renderGateComment(input) {
     parts.push(`| **Policy** | ${policyCell(input.policy)} |`);
     parts.push("");
     parts.push(`**Attestation:** ${attestationLine(input.attestation)}`);
+    if (input.attestation.kind === "signed" && input.verify) {
+        parts.push("");
+        parts.push(`**Verify without Machinaut** — download the \`${SUMMARY_SUBJECT_NAME}\` file from this run's ` +
+            `\`${EVIDENCE_ARTIFACT}\` artifact, then:`);
+        parts.push("```bash");
+        parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow));
+        parts.push("```");
+    }
     parts.push("");
     parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`);
     parts.push("");
@@ -79683,149 +79844,6 @@ function intakeState(r) {
     }
 }
 
-;// CONCATENATED MODULE: ./src/version.ts
-/**
- * This build's release version, recorded in every governed-run statement as
- * `gate.action` (plan §2.2). Bump it in the same commit that prepares a release:
- * the release workflow refuses to alias a tag whose version does not match.
- */
-const ACTION_VERSION = "2.0.0";
-const ACTION_REPOSITORY = "machinise/machinaut-pr-action";
-const ACTION_REF = `${ACTION_REPOSITORY}@v${ACTION_VERSION}`;
-
-;// CONCATENATED MODULE: ./src/statement.ts
-
-
-/**
- * The in-toto Statement v1 this action signs (plan §2.2, D3).
- *
- * Built field-for-field the way `@actions/attest` builds it
- * (`{_type, subject, predicateType, predicate}`), so the file written to
- * `statement-path` is byte-identical to the payload the toolkit signs.
- */
-const STATEMENT_TYPE = "https://in-toto.io/Statement/v1";
-const PREDICATE_TYPE = "https://machinaut.ai/attestation/governed-run/v1";
-/** File name of the evidence-document subject (see {@link buildSubjects}). */
-const SUMMARY_SUBJECT_NAME = "machinaut-governance-summary.json";
-/**
- * Canonical JSON: object keys sorted (UTF-16 code-unit order, i.e. plain ASCII
- * order for every key this predicate has), no whitespace. Reproducible by an
- * auditor with `jq -cjS` — see the README's verification recipe.
- */
-function canonicalJson(value) {
-    return JSON.stringify(sortKeys(value));
-}
-function sortKeys(value) {
-    if (Array.isArray(value))
-        return value.map(sortKeys);
-    if (value !== null && typeof value === "object") {
-        const out = {};
-        for (const k of Object.keys(value).sort()) {
-            out[k] = sortKeys(value[k]);
-        }
-        return out;
-    }
-    return value;
-}
-/** The bytes of the evidence-document subject: the canonical summary. */
-function summaryDocument(summary) {
-    return canonicalJson(summary);
-}
-function sha256Hex(s) {
-    return (0,external_node_crypto_.createHash)("sha256").update(s, "utf8").digest("hex");
-}
-/**
- * Subjects, in a fixed order:
- *  1. **The PR head commit** — `{name: "<owner>/<repo>", digest: {gitCommit}}` (D3).
- *     This is what the gate is about.
- *  2. **The evidence document the gate evaluated** — sha256 of the canonical
- *     governance summary, written next to the bundle as
- *     `machinaut-governance-summary.json`. GitHub's attestation store and
- *     `gh attestation verify` look attestations up by an artifact's sha256 and
- *     cannot match a `gitCommit`-only subject, so this second subject is what
- *     lets `gh attestation verify <summary file> --repo … --predicate-type …`
- *     work with no Machinaut involvement. It adds no new data: the same summary
- *     is the predicate (minus `gate`).
- */
-function buildSubjects(input) {
-    return [
-        { name: `${input.owner}/${input.repo}`, digest: { gitCommit: input.headSha } },
-        { name: SUMMARY_SUBJECT_NAME, digest: { sha256: sha256Hex(summaryDocument(input.summary)) } },
-    ];
-}
-/**
- * Build the governed-run Statement. Pure and deterministic: the same input
- * always serialises to the same bytes (key order is fixed by construction).
- *
- * The predicate is the summary (already projected onto the frozen
- * `governance_summary@1` shape by `parseGovernanceSummary`) plus the `gate`
- * block this action wrote. {@link assertPredicatePrivacy} re-checks, at runtime,
- * that nothing outside that shape slipped in.
- */
-function buildStatement(input) {
-    const { summary } = input;
-    const predicate = {
-        machinaut: summary.machinaut,
-        chain: summary.chain,
-        holds: summary.holds,
-        holds_truncated: summary.holds_truncated,
-        sentinels: summary.sentinels,
-        unreadable: summary.unreadable,
-        gate: {
-            action: input.actionRef ?? ACTION_REF,
-            policy: input.policy,
-            decision: input.decision,
-            reasons: input.reasons,
-        },
-    };
-    assertPredicatePrivacy(predicate);
-    return {
-        _type: STATEMENT_TYPE,
-        subject: buildSubjects(input),
-        predicateType: PREDICATE_TYPE,
-        predicate,
-    };
-}
-/** Every key the predicate may carry. The statement is published to a public
- *  transparency log, so anything else — a payload, a prompt, an approver's reason
- *  text, an actor name — is a bug, and signing must stop. */
-const ALLOWED_PREDICATE_KEYS = new Set([
-    // machinaut
-    "machinaut", "console", "project_id", "session_id", "summary_version", "as_of",
-    // chain
-    "chain", "events", "readable", "redacted_commitments", "chain_digest", "first_seq", "last_seq",
-    // holds
-    "holds", "request_id", "action_representation_hash", "outcome", "evidence", "quorum", "k", "m", "record_digest",
-    "holds_truncated",
-    // sentinels
-    "sentinels", "info", "warning", "critical",
-    // what the shipper withheld (counts only)
-    "unreadable", "approval_requests", "sentinel_alerts",
-    // gate (written by this action)
-    "gate", "action", "policy", "require_holds_resolved", "require_bound_approvals", "max_sentinel_severity",
-    "allow_unreadable", "decision", "reasons",
-]);
-class PredicatePrivacyError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = "PredicatePrivacyError";
-    }
-}
-function assertPredicatePrivacy(predicate, path = "predicate") {
-    if (Array.isArray(predicate)) {
-        predicate.forEach((v, i) => assertPredicatePrivacy(v, `${path}[${i}]`));
-        return;
-    }
-    if (predicate !== null && typeof predicate === "object") {
-        for (const [k, v] of Object.entries(predicate)) {
-            if (!ALLOWED_PREDICATE_KEYS.has(k)) {
-                throw new PredicatePrivacyError(`refusing to sign: ${path}.${k} is not a governed-run/v1 predicate field`);
-            }
-            assertPredicatePrivacy(v, `${path}.${k}`);
-        }
-    }
-}
-
 ;// CONCATENATED MODULE: ./src/sticky.ts
 /**
  * Find-or-update the single evidence comment on a PR, keyed by a hidden marker.
@@ -80011,7 +80029,19 @@ async function runGate(inputs, deps) {
     for (const n of result.notes)
         core.notice(`${CHECK_NAME}: ${n}`);
     // 3. Statement — written to disk whether or not it is signed.
-    const statement = buildStatement({ owner, repo, headSha, summary, policy, decision: result.decision, reasons: result.reasons });
+    const statement = buildStatement({
+        owner,
+        repo,
+        headSha,
+        summary,
+        policy,
+        decision: result.decision,
+        reasons: result.reasons,
+        actionInvocation: {
+            ref: deps.env.GITHUB_ACTION_REF || undefined,
+            repository: deps.env.GITHUB_ACTION_REPOSITORY || undefined,
+        },
+    });
     // One directory PER INVOCATION: two gate steps in a job (e.g. two policies for
     // one session) must not overwrite each other's signed evidence behind their outputs.
     const invocation = `${safeSegment(inputs.sessionId)}-${(deps.uniqueId ?? external_node_crypto_.randomUUID)()}`;
@@ -80086,7 +80116,17 @@ async function runGate(inputs, deps) {
     core.setOutput("attestation", outcome.attestation ?? "");
     core.setOutput("intake", outcome.intake ?? "not_attempted");
     // 5. Verdict comment (sticky, updated in place).
-    await postComment(renderGateComment({ summary, result, policy, dryRun: inputs.dryRun, headSha, sessionUrl, attestation, intake }));
+    await postComment(renderGateComment({
+        summary,
+        result,
+        policy,
+        dryRun: inputs.dryRun,
+        headSha,
+        sessionUrl,
+        attestation,
+        intake,
+        verify: { repo: `${owner}/${repo}`, signerWorkflow: signerWorkflowFromEnv(deps.env) },
+    }));
     // 6. The check itself.
     if (result.decision === "fail") {
         const why = result.failures.join("; ");
@@ -80120,6 +80160,14 @@ async function resolvePrAndHead(octokit, ctx) {
 async function defaultWriteFile(path, data) {
     await (0,promises_.mkdir)((0,external_node_path_.join)(path, ".."), { recursive: true });
     await (0,promises_.writeFile)(path, data, "utf8");
+}
+/** `owner/repo/.github/workflows/x.yml` from GITHUB_WORKFLOW_REF (`…@refs/heads/main` stripped). */
+function signerWorkflowFromEnv(env) {
+    const ref = env.GITHUB_WORKFLOW_REF;
+    if (!ref)
+        return undefined;
+    const at = ref.indexOf("@");
+    return at === -1 ? ref : ref.slice(0, at);
 }
 /** A session id as a single safe path segment. */
 function safeSegment(s) {

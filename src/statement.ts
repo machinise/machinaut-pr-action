@@ -23,6 +23,10 @@ export interface Subject {
 
 export interface GatePredicateBlock {
   action: string
+  /** GITHUB_ACTION_REF: how the action was actually invoked (tag, branch or bare SHA). Omitted when unset. */
+  action_ref?: string
+  /** GITHUB_ACTION_REPOSITORY. Omitted when unset. */
+  action_repository?: string
   policy: PredicatePolicy
   decision: Decision
   reasons: string[]
@@ -48,6 +52,8 @@ export interface StatementInput {
   reasons: string[]
   /** Defaults to this build's `machinise/machinaut-pr-action@v<version>`. */
   actionRef?: string
+  /** Invocation facts GitHub provides; not payloads. Either is omitted when absent. */
+  actionInvocation?: { ref?: string; repository?: string }
 }
 
 /**
@@ -120,6 +126,8 @@ export function buildStatement(input: StatementInput): Statement {
     unreadable: summary.unreadable,
     gate: {
       action: input.actionRef ?? ACTION_REF,
+      ...(input.actionInvocation?.ref ? { action_ref: input.actionInvocation.ref } : {}),
+      ...(input.actionInvocation?.repository ? { action_repository: input.actionInvocation.repository } : {}),
       policy: input.policy,
       decision: input.decision,
       reasons: input.reasons,
@@ -150,7 +158,7 @@ const ALLOWED_PREDICATE_KEYS = new Set([
   // what the shipper withheld (counts only)
   "unreadable", "approval_requests", "sentinel_alerts",
   // gate (written by this action)
-  "gate", "action", "policy", "require_holds_resolved", "require_bound_approvals", "max_sentinel_severity",
+  "gate", "action", "action_ref", "action_repository", "policy", "require_holds_resolved", "require_bound_approvals", "max_sentinel_severity",
   "allow_unreadable", "decision", "reasons",
 ])
 

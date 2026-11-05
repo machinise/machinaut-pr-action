@@ -1,6 +1,7 @@
 import type { GateResult, PredicatePolicy } from "./gate"
 import type { GovernanceSummary, HoldEvidence, HoldOutcome } from "./governance"
 import type { IntakeState } from "./intake"
+import { PREDICATE_TYPE, SUMMARY_SUBJECT_NAME } from "./statement"
 import { type SkipReason, STORE_HINT } from "./signing"
 
 /**
@@ -32,6 +33,8 @@ export interface GateCommentInput {
   attestation: AttestationState
   /** Defaults to not attempted (unsigned). */
   intake?: IntakeState
+  /** `owner/repo` and the signing workflow path (`owner/repo/.github/workflows/x.yml`), for the verify recipe. */
+  verify?: { repo: string; signerWorkflow?: string }
 }
 
 /**
@@ -48,6 +51,17 @@ export const CANDOR_LINES = [
     `are [Lodestar](${LODESTAR_URL}) OSS. GitHub enforces this check through your branch protection — ` +
     "Machinaut cannot block a merge.",
 ]
+
+/** The artifact the example workflow uploads the evidence files as. */
+export const EVIDENCE_ARTIFACT = "machinaut-governed-run"
+
+/** One line; the same text the console shows as `verify_recipe`. */
+export function verifyRecipe(repo: string, signerWorkflow = "<owner>/<repo>/.github/workflows/<workflow>.yml"): string {
+  return (
+    `gh attestation verify ${SUMMARY_SUBJECT_NAME} --repo ${repo} --predicate-type ${PREDICATE_TYPE} ` +
+    `--signer-workflow ${signerWorkflow}`
+  )
+}
 
 export function renderGateComment(input: GateCommentInput): string {
   const { summary, result, dryRun } = input
@@ -86,6 +100,16 @@ export function renderGateComment(input: GateCommentInput): string {
 
   parts.push("")
   parts.push(`**Attestation:** ${attestationLine(input.attestation)}`)
+  if (input.attestation.kind === "signed" && input.verify) {
+    parts.push("")
+    parts.push(
+      `**Verify without Machinaut** — download the \`${SUMMARY_SUBJECT_NAME}\` file from this run's ` +
+        `\`${EVIDENCE_ARTIFACT}\` artifact, then:`,
+    )
+    parts.push("```bash")
+    parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow))
+    parts.push("```")
+  }
   parts.push("")
   parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`)
   parts.push("")

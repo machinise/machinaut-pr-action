@@ -5,14 +5,15 @@ Notable changes to this action. Format follows
 [SemVer](https://semver.org/). Consumers should pin the moving major alias
 (`@v1`), which the release workflow re-points at each `v1.x.y` release.
 
-## [Unreleased]
+## [2.0.0] - 2026-11-06
 
-Intended as **2.0.0** (floating tag `v2`) — not tagged or released yet. Gate mode
+Floating tag `v2`. Gate mode
 asks for new job permissions and pins a signed predicate, so it gets its own major;
-comment mode is unchanged and `v1` consumers are unaffected. Gate mode is **beta**
-and has **not** been run against a live control plane: it needs the control plane's
-`GET …/sessions/:s/governance` route (`governance_summary@1`, Track G slice G0),
-which the hosted console does not serve yet.
+comment mode is unchanged and `v1` consumers are unaffected. Gate mode is **beta**.
+First live run (2026-11-06): test PR #9, signed run `42055483871`, attestation
+<https://github.com/machinise/machinaut-pr-action/attestations/64097467>; the
+decision was `fail` for the demo session's unresolved hold — an honest result,
+not a bug.
 
 ### Added
 
@@ -48,6 +49,13 @@ which the hosted console does not serve yet.
   "Recorded in Machinaut" line. Reporting only: the outcome never changes the
   decision or fails the step, and the action does not claim Machinaut verified
   anything — verification status appears in the console.
+
+- The signed sticky comment now includes the exact `gh attestation verify
+  machinaut-governance-summary.json --repo … --predicate-type … --signer-workflow …`
+  recipe (one fenced line) and names the `machinaut-governed-run` artifact file.
+- Predicate `gate.action_ref` (`GITHUB_ACTION_REF`) and `gate.action_repository`
+  (`GITHUB_ACTION_REPOSITORY`): how the action was actually invoked (e.g. a bare
+  SHA), alongside the `gate.action` version. Omitted when GitHub does not set them.
 
 ### Changed
 
