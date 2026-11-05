@@ -56,10 +56,15 @@ export const CANDOR_LINES = [
 export const EVIDENCE_ARTIFACT = "machinaut-governed-run"
 
 /** One line; the same text the console shows as `verify_recipe`. */
-export function verifyRecipe(repo: string, signerWorkflow = "<owner>/<repo>/.github/workflows/<workflow>.yml"): string {
+export function verifyRecipe(
+  repo: string,
+  signerWorkflow = "<owner>/<repo>/.github/workflows/<workflow>.yml",
+  bundle = false,
+): string {
+  const quoted = /^[A-Za-z0-9_.\/<>-]+$/.test(signerWorkflow) ? signerWorkflow : `'${signerWorkflow.replace(/'/g, `'\\''`)}'`
   return (
     `gh attestation verify ${SUMMARY_SUBJECT_NAME} --repo ${repo} --predicate-type ${PREDICATE_TYPE} ` +
-    `--signer-workflow ${signerWorkflow}`
+    `--signer-workflow ${quoted}${bundle ? " --bundle governed-run.sigstore.json" : ""}`
   )
 }
 
@@ -104,10 +109,10 @@ export function renderGateComment(input: GateCommentInput): string {
     parts.push("")
     parts.push(
       `**Verify without Machinaut** — download the \`${SUMMARY_SUBJECT_NAME}\` file from this run's ` +
-        `\`${EVIDENCE_ARTIFACT}\` artifact, then:`,
+        `\`${EVIDENCE_ARTIFACT}\` artifact${input.attestation.storeError ? " (plus `governed-run.sigstore.json`, since GitHub did not store it)" : ""}, then:`,
     )
     parts.push("```bash")
-    parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow))
+    parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow, Boolean(input.attestation.storeError)))
     parts.push("```")
   }
   parts.push("")

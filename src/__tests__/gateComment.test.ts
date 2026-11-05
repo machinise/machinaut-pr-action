@@ -39,9 +39,15 @@ describe("renderGateComment", () => {
   it("includes the exact verify recipe (one line) when signed, incl. signed-not-stored", () => {
     for (const attestation of [{ kind: "signed" as const }, { kind: "signed" as const, storeError: "HTTP 403" }]) {
       const body = render({ attestation, verify })
-      expect(body).toContain(`\`\`\`bash\n${RECIPE}\n\`\`\``)
+      const expected = attestation.storeError ? `${RECIPE} --bundle governed-run.sigstore.json` : RECIPE
+      expect(body).toContain(`\`\`\`bash\n${expected}\n\`\`\``)
       expect(body).toContain("`machinaut-governed-run` artifact")
     }
+  })
+
+  it("shell-quotes an unusual workflow path", () => {
+    const body = render({ verify: { repo: "acme/widgets", signerWorkflow: "acme/widgets/.github/workflows/a b$(x).yml" } })
+    expect(body).toContain("--signer-workflow 'acme/widgets/.github/workflows/a b$(x).yml'")
   })
 
   it("omits the verify recipe when unsigned or failed", () => {

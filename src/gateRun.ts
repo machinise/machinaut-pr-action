@@ -361,7 +361,7 @@ async function defaultWriteFile(path: string, data: string): Promise<void> {
 function signerWorkflowFromEnv(env: Record<string, string | undefined>): string | undefined {
   const ref = env.GITHUB_WORKFLOW_REF
   if (!ref) return undefined
-  const at = ref.indexOf("@")
+  const at = ref.lastIndexOf("@refs/")
   return at === -1 ? ref : ref.slice(0, at)
 }
 

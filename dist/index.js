@@ -79222,9 +79222,10 @@ const CANDOR_LINES = [
 /** The artifact the example workflow uploads the evidence files as. */
 const EVIDENCE_ARTIFACT = "machinaut-governed-run";
 /** One line; the same text the console shows as `verify_recipe`. */
-function verifyRecipe(repo, signerWorkflow = "<owner>/<repo>/.github/workflows/<workflow>.yml") {
+function verifyRecipe(repo, signerWorkflow = "<owner>/<repo>/.github/workflows/<workflow>.yml", bundle = false) {
+    const quoted = /^[A-Za-z0-9_.\/<>-]+$/.test(signerWorkflow) ? signerWorkflow : `'${signerWorkflow.replace(/'/g, `'\\''`)}'`;
     return (`gh attestation verify ${SUMMARY_SUBJECT_NAME} --repo ${repo} --predicate-type ${PREDICATE_TYPE} ` +
-        `--signer-workflow ${signerWorkflow}`);
+        `--signer-workflow ${quoted}${bundle ? " --bundle governed-run.sigstore.json" : ""}`);
 }
 function renderGateComment(input) {
     const { summary, result, dryRun } = input;
@@ -79258,9 +79259,9 @@ function renderGateComment(input) {
     if (input.attestation.kind === "signed" && input.verify) {
         parts.push("");
         parts.push(`**Verify without Machinaut** — download the \`${SUMMARY_SUBJECT_NAME}\` file from this run's ` +
-            `\`${EVIDENCE_ARTIFACT}\` artifact, then:`);
+            `\`${EVIDENCE_ARTIFACT}\` artifact${input.attestation.storeError ? " (plus `governed-run.sigstore.json`, since GitHub did not store it)" : ""}, then:`);
         parts.push("```bash");
-        parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow));
+        parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow, Boolean(input.attestation.storeError)));
         parts.push("```");
     }
     parts.push("");
@@ -80166,7 +80167,7 @@ function signerWorkflowFromEnv(env) {
     const ref = env.GITHUB_WORKFLOW_REF;
     if (!ref)
         return undefined;
-    const at = ref.indexOf("@");
+    const at = ref.lastIndexOf("@refs/");
     return at === -1 ? ref : ref.slice(0, at);
 }
 /** A session id as a single safe path segment. */
