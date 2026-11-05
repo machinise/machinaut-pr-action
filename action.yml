@@ -3,7 +3,9 @@ description: >-
   Post an agent-authored PR's evidence trail as one sticky comment: a verdict
   teaser quoted from the Lodestar trust report, plus a deep link to the session
   in Machinaut. Read-only — it uses your existing project key and links to your
-  team's console (sign-in required), never to a public page.
+  team's console (sign-in required), never to a public page. Optional gate mode
+  (beta): your CI evaluates the run's governance facts against your policy, signs
+  the decision with its own Sigstore identity, and fails a required check.
 author: 'Machinise'
 
 branding:
@@ -14,7 +16,8 @@ inputs:
   machinaut-api-key:
     description: >-
       Your Machinaut project API key, supplied as a repo secret. Used read-only
-      (the action calls GET /v1/projects/:p/sessions/:s?report=1). This is NOT a
+      (comment mode calls GET /v1/projects/:p/sessions/:s?report=1; gate mode
+      calls GET /v1/projects/:p/sessions/:s/governance). This is NOT a
       publish credential — a project key cannot mint a public share by design,
       which is why the comment links to your sign-in-walled team console.
     required: true
@@ -42,15 +45,64 @@ inputs:
     default: ''
   github-token:
     description: >-
-      Token used to create/update the sticky PR comment. The default job token
-      works when the job has `pull-requests: write` permission.
+      Token used to create/update the sticky PR comment (and, in gate mode, to
+      store the attestation). The default job token works when the job has
+      `pull-requests: write` (plus `attestations: write` for gate mode).
     required: false
     default: ${{ github.token }}
   fail-on-error:
     description: >-
-      When 'false' (default), any problem (empty session, no PR, API or comment
-      failure) logs a warning and exits successfully, so a non-critical evidence
-      comment never turns a PR check red. Set 'true' to fail the job on error.
+      Whether infrastructure problems (API or comment failure, and in gate mode
+      an unreadable summary or a signing failure) fail the job. Comment mode
+      defaults to 'false': problems log a warning and exit successfully, so a
+      non-critical evidence comment never turns a PR check red. Gate mode
+      defaults to 'true' (fail closed): a required check that could not read the
+      facts or produce its attestation must not go green. A gate `decision: fail`
+      always fails the step, whatever this is set to.
+    required: false
+    default: ''
+  mode:
+    description: >-
+      'comment' (default) posts the evidence comment. 'gate' (beta) fetches the
+      session's governance summary, evaluates the policy inputs below, signs the
+      decision as an in-toto statement with this workflow's Sigstore identity,
+      refreshes a sticky verdict comment, and FAILS the step on `decision: fail`.
+      Gate mode needs `id-token: write` and `attestations: write` to sign.
+    required: false
+    default: 'comment'
+  require-holds-resolved:
+    description: >-
+      Gate mode. When 'true' (default), every hold must be `granted` or `denied`
+      with a host record shipped by your kernel; `relay_only` and `unavailable`
+      count as unresolved, and a truncated hold list fails.
+    required: false
+    default: 'true'
+  require-bound-approvals:
+    description: >-
+      Gate mode. When 'true', every granted hold must carry an ADR-0042
+      `action_representation_hash` (approval bound to the exact action). Default 'false'.
+    required: false
+    default: 'false'
+  max-sentinel-severity:
+    description: >-
+      Gate mode. Highest sentinel severity tolerated: 'warning' (default — any
+      critical sentinel fails), 'info' (any warning or critical fails), or
+      'critical' (sentinels never fail the gate).
+    required: false
+    default: 'warning'
+  allow-unreadable:
+    description: >-
+      Gate mode. Records the shipper withheld (below the `secret` sensitivity
+      ceiling) cannot be evaluated. When 'false' (default) the gate fails closed:
+      unreadable approval requests fail the hold rules and unreadable sentinel
+      alerts fail the sentinel rule. 'true' records them as a stated reason that
+      does not fail the gate.
+    required: false
+    default: 'false'
+  dry-run:
+    description: >-
+      Gate mode. When 'true', evaluate and comment but do not sign and never fail
+      the step — for trying a policy before making the check required.
     required: false
     default: 'false'
 
@@ -65,6 +117,24 @@ outputs:
     description: >-
       One of `created`, `updated`, or `skipped:<reason>` — machine-readable
       outcome for downstream steps.
+  decision:
+    description: 'Gate mode: `pass` or `fail` (empty if the gate did not evaluate).'
+  reasons:
+    description: 'Gate mode: JSON array of human-readable failure reasons (`[]` on pass).'
+  attestation:
+    description: >-
+      Gate mode: `signed`, `signed-not-stored`, `skipped:dry-run`,
+      `skipped:fork`, `skipped:permissions`, or `failed`.
+  attestation-url:
+    description: 'Gate mode: the GitHub attestation page, when the signed attestation was stored.'
+  bundle-path:
+    description: 'Gate mode: path to the Sigstore bundle (JSON) for offline verification, when signed.'
+  statement-path:
+    description: 'Gate mode: path to the in-toto statement that was (or, unsigned, would be) signed.'
+  summary-path:
+    description: >-
+      Gate mode: path to the canonical governance summary the gate evaluated — the
+      sha256 subject `gh attestation verify` checks against.
 
 runs:
   using: 'node24'

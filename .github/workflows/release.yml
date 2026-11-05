@@ -48,6 +48,19 @@ jobs:
           fi
           git checkout --quiet "refs/tags/$TAG"
 
+      - name: Refuse a tag that differs from the version gate mode records
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          # Gate mode writes `machinise/machinaut-pr-action@v<ACTION_VERSION>` into
+          # every signed statement, so the tag must match it exactly. (Tags cut
+          # before gate mode existed have no src/version.ts and are let through.)
+          if [ -f src/version.ts ] && ! grep -Fq "ACTION_VERSION = \"${TAG#v}\"" src/version.ts; then
+            echo "::error::src/version.ts ACTION_VERSION does not match $TAG — bump it in the release commit"
+            exit 1
+          fi
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

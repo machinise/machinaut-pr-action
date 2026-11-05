@@ -19,6 +19,7 @@
     "all": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
+    "@actions/attest": "^1.6.0",
     "@actions/core": "^1.11.1",
     "@actions/github": "^6.0.0"
   },

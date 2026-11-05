@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { findPrNumberForSha, type PrLister, prTargetFromPayload } from "../events"
+import { findPrNumberForSha, headShaFromPayload, type PrLister, prTargetFromPayload } from "../events"
 
 const CONTEXT_SHA = "default-branch-sha"
 
@@ -88,5 +88,19 @@ describe("findPrNumberForSha", () => {
       throw new Error("Bad credentials")
     })
     await expect(findPrNumberForSha(octokit, { owner: "o", repo: "r", sha: "s" })).rejects.toThrow("Bad credentials")
+  })
+})
+
+describe("headShaFromPayload (gate mode's gitCommit subject)", () => {
+  it("prefers pull_request.head.sha over the merge commit in context.sha", () => {
+    expect(headShaFromPayload({ pull_request: { number: 1, head: { sha: "head1" } } }, CONTEXT_SHA, "pull_request")).toBe("head1")
+  })
+  it("uses workflow_run.head_sha", () => {
+    expect(headShaFromPayload({ workflow_run: { head_sha: "run-head" } }, CONTEXT_SHA, "workflow_run")).toBe("run-head")
+  })
+  it("uses context.sha only on push / merge_group", () => {
+    expect(headShaFromPayload({}, "tip", "push")).toBe("tip")
+    expect(headShaFromPayload({}, CONTEXT_SHA, "issue_comment")).toBeUndefined()
+    expect(headShaFromPayload({}, CONTEXT_SHA, "workflow_dispatch")).toBeUndefined()
   })
 })

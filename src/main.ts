@@ -1,7 +1,9 @@
+import { attest } from "@actions/attest"
 import * as core from "@actions/core"
 import * as github from "@actions/github"
 import { renderComment, STICKY_MARKER } from "./comment"
 import { findPrNumberForSha, type PrPayload, prTargetFromPayload } from "./events"
+import { type GateGitHubApi, runGate } from "./gateRun"
 import { readInputs } from "./inputs"
 import { fetchSessionReport, MachinautApiError, normalizeBaseUrl } from "./machinaut"
 import { type CommentApi, upsertStickyComment } from "./sticky"
@@ -16,6 +18,19 @@ import { type CommentApi, upsertStickyComment } from "./sticky"
  */
 export async function run(): Promise<void> {
   const inputs = readInputs()
+
+  // Gate mode (beta, Track G G1) is opt-in; the default `mode: comment` below is
+  // Increment 1, unchanged.
+  if (inputs.mode === "gate") {
+    await runGate(inputs, {
+      core,
+      context: github.context,
+      octokit: () => github.getOctokit(inputs.githubToken) as unknown as GateGitHubApi,
+      attest,
+      env: process.env,
+    })
+    return
+  }
 
   // A missing/empty result means nothing was shipped — the honest "not
   // agent-authored" signal. Skip cleanly, never fail (plan D1: no false positives).

@@ -94,3 +94,49 @@ export async function findPrNumberForSha(
   const open = prs.find((p) => p.state === "open") ?? prs[0]
   return open?.number
 }
+
+/**
+ * Gate mode: the PR head commit the governed-run statement is about (its
+ * `gitCommit` subject, plan D3). Same SHA-source discipline as
+ * {@link prTargetFromPayload}: the payload's own head SHA first
+ * (`pull_request.head.sha`, `workflow_run.head_sha`), else `contextSha` only on
+ * events where it IS the head ({@link CONTEXT_SHA_EVENTS}). Returns undefined
+ * when the payload cannot say (e.g. `issue_comment`) — the caller then reads the
+ * PR's head from the API.
+ */
+export function headShaFromPayload(
+  payload: PrPayload,
+  contextSha: string | undefined,
+  eventName: string | undefined,
+): string | undefined {
+  const fromPayload = payload.pull_request?.head?.sha ?? payload.workflow_run?.head_sha
+  if (fromPayload) return fromPayload
+  return eventName !== undefined && CONTEXT_SHA_EVENTS.has(eventName) && contextSha ? contextSha : undefined
+}
+
+/** The fork-relevant slice of a `pull_request` payload. */
+export interface ForkPayload {
+  pull_request?: {
+    head?: { repo?: { full_name?: string } | null }
+    base?: { repo?: { full_name?: string } | null }
+  }
+}
+
+/**
+ * Whether this run is a `pull_request`-family event from a fork. GitHub withholds
+ * repository secrets and OIDC tokens from such runs, so the gate cannot sign.
+ * (`pull_request_target` runs in the base repo's context and is NOT restricted.)
+ * A PR whose head repo is gone (`null` — a deleted fork) is treated as a fork.
+ */
+export function isForkPullRequest(payload: ForkPayload, eventName: string | undefined): boolean {
+  if (eventName === undefined || !eventName.startsWith("pull_request") || eventName === "pull_request_target") {
+    return false
+  }
+  const pr = payload.pull_request
+  if (!pr) return false
+  if (pr.head?.repo === null) return true // the fork was deleted
+  const head = pr.head?.repo?.full_name
+  const base = pr.base?.repo?.full_name
+  if (!head || !base) return false
+  return head.toLowerCase() !== base.toLowerCase()
+}
