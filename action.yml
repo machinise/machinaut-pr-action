@@ -99,6 +99,13 @@ inputs:
       does not fail the gate.
     required: false
     default: 'false'
+  post-attestation:
+    description: >-
+      Gate mode (beta). When 'true' (default), POST the signed Sigstore bundle to
+      Machinaut's attestation intake so the console can verify and label it. Never
+      changes the decision or fails the step. 'false' skips the upload.
+    required: false
+    default: 'true'
   dry-run:
     description: >-
       Gate mode. When 'true', evaluate and comment but do not sign and never fail
@@ -125,6 +132,10 @@ outputs:
     description: >-
       Gate mode: `signed`, `signed-not-stored`, `skipped:dry-run`,
       `skipped:fork`, `skipped:permissions`, or `failed`.
+  intake:
+    description: >-
+      Gate mode: `recorded`, `not_available`, `rejected`, `failed`, or
+      `not_attempted` — whether the signed bundle was recorded by Machinaut.
   attestation-url:
     description: 'Gate mode: the GitHub attestation page, when the signed attestation was stored.'
   bundle-path:

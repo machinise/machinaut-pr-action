@@ -21,6 +21,7 @@ function inputs(overrides: Partial<Inputs> = {}): Inputs {
     mode: "gate",
     policy: { requireHoldsResolved: true, requireBoundApprovals: false, maxSentinelSeverity: "warning", allowUnreadable: false },
     dryRun: false,
+    postAttestation: true,
     ...overrides,
   }
 }
@@ -152,8 +153,13 @@ describe("runGate — pass, signed", () => {
     const signed = h.attest.mock.calls[0]![0]
     expect({ _type: statement._type, subject: signed.subjects, predicateType: signed.predicateType, predicate: signed.predicate }).toEqual(statement)
 
-    // the G2 intake seam makes no network call: one GET to Machinaut, nothing else
-    expect(h.fetch).toHaveBeenCalledTimes(1)
+    // one GET for the facts, then the bundle POST to the intake
+    expect(h.fetch).toHaveBeenCalledTimes(2)
+    const [url, init] = h.fetch.mock.calls[1]!
+    expect(url).toBe("https://console.machinaut.ai/v1/projects/demo/sessions/sess-demo/attestations")
+    expect(init.method).toBe("POST")
+    expect(init.body).toBe(JSON.stringify({ mediaType: "sigstore-bundle" }))
+    expect(h.outputs.intake).toBe("recorded")
 
     const body = h.lastBody()
     expect(body.startsWith(GATE_STICKY_MARKER)).toBe(true)
@@ -421,5 +427,74 @@ describe("runGate — applicability and PR resolution", () => {
     const out = await runGate(inputs(), h.deps)
     expect(out.status).toBe("skipped:comment-failed")
     expect(h.core.setFailed.mock.calls[0]![0]).toMatch(/comment-failed/)
+  })
+})
+
+describe("runGate — attestation intake never changes the gate", () => {
+  /** Facts on the GET, `intake` on the POST. */
+  function withIntake(respond: () => Response | Promise<Response>, extra: Parameters<typeof harness>[0] = {}) {
+    const h = harness(extra)
+    h.fetch.mockImplementation(async (_u: string, init: { method: string }) =>
+      init.method === "POST" ? respond() : jsonResponse(200, extra.body ?? rawSummary()),
+    )
+    return h
+  }
+
+  for (const [status, intake, text] of [
+    [404, "not_available", "not available on this console"],
+    [401, "rejected", "rejected (http_401)"],
+    [403, "rejected", "rejected (http_403)"],
+    [413, "rejected", "rejected (too\\_large)"],
+    [500, "failed", "failed (HTTP 500)"],
+  ] as const) {
+    it(`HTTP ${status} -> ${intake}; decision pass, step passes, signed`, async () => {
+      const h = withIntake(() => jsonResponse(status, status === 413 ? { error: "too_large" } : {}))
+      const out = await runGate(inputs(), h.deps)
+      expect(out).toMatchObject({ decision: "pass", attestation: "signed" })
+      expect(h.outputs.intake).toBe(intake)
+      expect(h.core.setFailed).not.toHaveBeenCalled()
+      expect(h.lastBody()).toContain(`**Recorded in Machinaut:** ${text}`)
+    })
+  }
+
+  it("a fail decision stays a fail whatever the intake says", async () => {
+    const raw = rawSummary()
+    raw.sentinels.critical = 1
+    const h = withIntake(() => jsonResponse(201, {}), { body: raw })
+    const out = await runGate(inputs(), h.deps)
+    expect(out).toMatchObject({ decision: "fail", intake: "recorded" })
+    expect(h.core.setFailed).toHaveBeenCalledTimes(1)
+    expect(h.lastBody()).toContain("**Recorded in Machinaut:** yes")
+  })
+
+  it("network failure is retried once, then failed without failing the step", async () => {
+    const h = withIntake(() => Promise.reject(new Error("boom")))
+    const out = await runGate(inputs(), h.deps)
+    expect(h.fetch).toHaveBeenCalledTimes(3) // GET + POST + one retry
+    expect(out.intake).toBe("failed")
+    expect(h.core.setFailed).not.toHaveBeenCalled()
+    expect(h.lastBody()).toContain("failed (could not reach Machinaut)")
+  })
+
+  it("post-attestation: false skips the upload with a log line", async () => {
+    const h = harness()
+    await runGate(inputs({ postAttestation: false }), h.deps)
+    expect(h.fetch).toHaveBeenCalledTimes(1)
+    expect(h.outputs.intake).toBe("not_attempted")
+    expect(h.core.info.mock.calls.flat().join("\n")).toMatch(/post-attestation is false/)
+    expect(h.lastBody()).toContain("not attempted (post-attestation: false)")
+  })
+
+  it("dry-run and unsigned runs never call the intake", async () => {
+    const dry = harness()
+    await runGate(inputs({ dryRun: true }), dry.deps)
+    expect(dry.fetch).toHaveBeenCalledTimes(1)
+    expect(dry.outputs.intake).toBe("not_attempted")
+    expect(dry.lastBody()).toContain("not attempted (dry-run)")
+
+    const noOidc = harness({ env: { RUNNER_TEMP: "/runner/tmp" } })
+    await runGate(inputs(), noOidc.deps)
+    expect(noOidc.fetch).toHaveBeenCalledTimes(1)
+    expect(noOidc.lastBody()).toContain("not attempted (unsigned)")
   })
 })

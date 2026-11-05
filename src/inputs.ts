@@ -33,6 +33,8 @@ export interface Inputs {
   /** Gate-mode only; parsed (and validated) only when `mode: gate`. */
   policy: GatePolicy
   dryRun: boolean
+  /** Gate-mode only: POST the signed bundle to Machinaut's attestation intake. Default true. */
+  postAttestation: boolean
 }
 
 /** YAML 1.2 core-schema booleans — the exact set `core.getBooleanInput` accepts. */
@@ -98,5 +100,6 @@ export function readInputs(): Inputs {
       allowUnreadable: gate ? parseBooleanInput("allow-unreadable", core.getInput("allow-unreadable"), false) : false,
     },
     dryRun: gate ? parseBooleanInput("dry-run", core.getInput("dry-run"), false) : false,
+    postAttestation: gate ? parseBooleanInput("post-attestation", core.getInput("post-attestation"), true) : true,
   }
 }

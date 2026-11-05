@@ -39,8 +39,15 @@ which the hosted console does not serve yet.
   failure is reported as such and never passed off as signed.
 - `examples/governed-run-gate.yml`; README "Gate mode (beta)" section (permissions,
   required-check setup, `gh attestation verify` recipe, candor).
-- A seam (`src/intake.ts`) for handing the bundle to Machinaut's attestation
-  intake (Track G, G2 — **planned**); it makes no network call yet.
+- Attestation intake upload (Track G, G2 follow-up, **beta**): after signing, the
+  bundle is POSTed to `/v1/projects/:p/sessions/:s/attestations` (project key,
+  `application/vnd.dev.sigstore.bundle.v0.3+json`, 415 falls back to
+  `application/json`, 15 s timeout, one retry on network error). New input
+  `post-attestation` (default `true`) and output `intake` (`recorded |
+  not_available | rejected | failed | not_attempted`); the sticky comment gains a
+  "Recorded in Machinaut" line. Reporting only: the outcome never changes the
+  decision or fails the step, and the action does not claim Machinaut verified
+  anything — verification status appears in the console.
 
 ### Changed
 

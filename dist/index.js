@@ -79103,6 +79103,8 @@ function renderGateComment(input) {
     parts.push("");
     parts.push(`**Attestation:** ${attestationLine(input.attestation)}`);
     parts.push("");
+    parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`);
+    parts.push("");
     parts.push(`**[Open the evidence in Machinaut →](${input.sessionUrl})**  ` +
         "🔒 _Sign-in required — your team's console, not a public page._");
     parts.push("");
@@ -79192,6 +79194,21 @@ function attestationLine(a) {
             return `🚫 **unsigned (${a.reason})** — ${a.detail}.`;
         case "failed":
             return `❌ **signing failed** — ${escapeMd(a.message)}. No attestation was produced for this run.`;
+    }
+}
+/** Reports only that the upload happened. Machinaut verifies on its side and labels the result in the console. */
+function intakeLine(i) {
+    switch (i.kind) {
+        case "recorded":
+            return "yes — uploaded; Machinaut verifies it on its side and shows the result in the console";
+        case "not_available":
+            return "not available on this console";
+        case "rejected":
+            return `rejected (${escapeMd(i.reason)})`;
+        case "failed":
+            return i.status === 0 ? "failed (could not reach Machinaut)" : `failed (HTTP ${i.status})`;
+        case "not_attempted":
+            return `not attempted (${i.why === "post-attestation-false" ? "post-attestation: false" : i.why})`;
     }
 }
 function footer() {
@@ -79543,13 +79560,119 @@ function noteExtra(o, known, prefix, dropped) {
 }
 
 ;// CONCATENATED MODULE: ./src/intake.ts
-async function submitBundleToIntake(_req) {
-    return {
-        submitted: false,
-        reason: "planned",
-        message: "Machinaut attestation intake (Track G, G2) is planned — the bundle was not sent to Machinaut; " +
-            "it is verifiable today with `gh attestation verify`",
+
+const BUNDLE_CONTENT_TYPE = "application/vnd.dev.sigstore.bundle.v0.3+json";
+const INTAKE_TIMEOUT_MS = 15_000;
+async function submitBundleToIntake(req, deps = {}) {
+    try {
+        return await intake_submit(req, deps);
+    }
+    catch (err) {
+        // Belt and braces: this function must never throw into the gate run.
+        return { outcome: "failed", status: 0, message: `Machinaut attestation intake failed: ${intake_errMessage(err)}` };
+    }
+}
+async function intake_submit(req, deps) {
+    const url = `${normalizeBaseUrl(req.apiUrl)}/v1/projects/${encodeURIComponent(req.projectId)}` +
+        `/sessions/${encodeURIComponent(req.sessionId)}/attestations`;
+    const body = JSON.stringify(req.bundle);
+    const doFetch = deps.fetch ?? fetch;
+    const timeoutMs = deps.timeoutMs ?? INTAKE_TIMEOUT_MS;
+    const post = async (contentType) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const res = await doFetch(url, {
+                method: "POST",
+                headers: {
+                    authorization: `Bearer ${req.apiKey}`,
+                    "content-type": contentType,
+                    accept: "application/json",
+                    "user-agent": "machinaut-pr-action",
+                },
+                body,
+                signal: controller.signal,
+            });
+            let parsed;
+            try {
+                parsed = await res.json();
+            }
+            catch {
+                /* non-JSON body; the status alone is enough */
+            }
+            return { status: res.status, body: parsed };
+        }
+        catch (err) {
+            const reason = err instanceof Error && err.name === "AbortError" ? `timed out after ${timeoutMs}ms` : intake_errMessage(err);
+            return { status: 0, networkError: reason };
+        }
+        finally {
+            clearTimeout(timer);
+        }
     };
+    let raw = await post(BUNDLE_CONTENT_TYPE);
+    if (raw.networkError !== undefined)
+        raw = await post(BUNDLE_CONTENT_TYPE); // one retry, network errors only
+    if (raw.status === 415)
+        raw = await post("application/json");
+    return classify(raw);
+}
+function classify(raw) {
+    const { status } = raw;
+    const code = errorCode(raw.body);
+    if (raw.networkError !== undefined) {
+        return { outcome: "failed", status: 0, message: `Machinaut attestation intake unreachable: ${raw.networkError}` };
+    }
+    if (status === 200 || status === 201) {
+        return { outcome: "recorded", status, message: "Machinaut recorded the signed attestation (it verifies and labels it in the console)" };
+    }
+    if (status === 404) {
+        return {
+            outcome: "not_available",
+            status,
+            message: "this Machinaut console does not have the attestation intake yet — the bundle was not recorded there",
+        };
+    }
+    if (status === 401 || status === 403) {
+        return {
+            outcome: "rejected",
+            status,
+            code: code ?? `http_${status}`,
+            message: `Machinaut rejected the attestation upload (${status}) — the project key may lack access to this project`,
+        };
+    }
+    if (status === 409 || status === 413) {
+        return {
+            outcome: "rejected",
+            status,
+            code: code ?? `http_${status}`,
+            message: `Machinaut rejected the attestation upload (${status}, ${code ?? `http_${status}`})`,
+        };
+    }
+    return { outcome: "failed", status, message: `Machinaut attestation intake failed (HTTP ${status})` };
+}
+function errorCode(body) {
+    if (body && typeof body === "object" && "error" in body) {
+        const e = body.error;
+        if (typeof e === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(e))
+            return e;
+    }
+    return undefined;
+}
+function intake_errMessage(err) {
+    return err instanceof Error ? err.message : String(err);
+}
+function intakeState(r) {
+    switch (r.outcome) {
+        case "recorded":
+            return { kind: "recorded" };
+        case "not_available":
+            return { kind: "not_available" };
+        case "rejected":
+            return { kind: "rejected", reason: r.code ?? `http_${r.status}` };
+        case "failed":
+            return { kind: "failed", status: r.status };
+    }
 }
 
 ;// CONCATENATED MODULE: ./src/version.ts
@@ -79899,6 +80022,7 @@ async function runGate(inputs, deps) {
     // 4. Signature — Sigstore keyless, this workflow's identity. Skips are visible.
     let attestation;
     let signed;
+    let intake = { kind: "not_attempted", why: inputs.dryRun ? "dry-run" : "unsigned" };
     const plan = planSigning({ dryRun: inputs.dryRun, eventName: context.eventName, payload: context.payload, env: deps.env });
     if (!plan.sign) {
         attestation = { kind: "skipped", reason: plan.reason, detail: plan.detail };
@@ -79929,14 +80053,20 @@ async function runGate(inputs, deps) {
             if (signed.storeError) {
                 core.warning(`governed-run statement signed but NOT stored in GitHub (${signed.storeError}) — ${STORE_HINT}`);
             }
-            const intake = await submitBundleToIntake({
-                apiUrl: inputs.apiUrl,
-                apiKey: inputs.apiKey,
-                projectId: inputs.projectId,
-                sessionId: inputs.sessionId,
-                bundle: signed.bundle,
-            });
-            core.info(intake.message);
+            // Intake is reporting only: its outcome never touches the decision or the step.
+            if (!inputs.postAttestation) {
+                intake = { kind: "not_attempted", why: "post-attestation-false" };
+                core.info("post-attestation is false — the signed bundle was not sent to Machinaut");
+            }
+            else {
+                const res = await submitBundleToIntake({ apiUrl: inputs.apiUrl, apiKey: inputs.apiKey, projectId: inputs.projectId, sessionId: inputs.sessionId, bundle: signed.bundle }, { fetch: deps.fetch });
+                intake = intakeState(res);
+                outcome.intake = res.outcome;
+                if (res.outcome === "recorded")
+                    core.info(res.message);
+                else
+                    core.notice(`machinaut attestation intake (${res.outcome}): ${res.message} — the signed attestation is unaffected`);
+            }
         }
         catch (err) {
             const message = err instanceof SigningError ? err.message : `signing failed: ${gateRun_errMessage(err)}`;
@@ -79946,8 +80076,9 @@ async function runGate(inputs, deps) {
         }
     }
     core.setOutput("attestation", outcome.attestation ?? "");
+    core.setOutput("intake", outcome.intake ?? "not_attempted");
     // 5. Verdict comment (sticky, updated in place).
-    await postComment(renderGateComment({ summary, result, policy, dryRun: inputs.dryRun, headSha, sessionUrl, attestation }));
+    await postComment(renderGateComment({ summary, result, policy, dryRun: inputs.dryRun, headSha, sessionUrl, attestation, intake }));
     // 6. The check itself.
     if (result.decision === "fail") {
         const why = result.failures.join("; ");
@@ -80057,6 +80188,7 @@ function readInputs() {
             allowUnreadable: gate ? parseBooleanInput("allow-unreadable", core.getInput("allow-unreadable"), false) : false,
         },
         dryRun: gate ? parseBooleanInput("dry-run", core.getInput("dry-run"), false) : false,
+        postAttestation: gate ? parseBooleanInput("post-attestation", core.getInput("post-attestation"), true) : true,
     };
 }
 

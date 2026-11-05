@@ -7,7 +7,7 @@ import { evaluateGate, type GateResult, predicatePolicy } from "./gate"
 import { type AttestationState, CHECK_NAME, GATE_STICKY_MARKER, renderGateComment, renderGateErrorComment } from "./gateComment"
 import { fetchGovernanceSummary, GovernanceSchemaError } from "./governance"
 import type { Inputs } from "./inputs"
-import { submitBundleToIntake } from "./intake"
+import { type IntakeState, intakeState, submitBundleToIntake } from "./intake"
 import { normalizeBaseUrl } from "./machinaut"
 import {
   type AttestationStoreApi,
@@ -86,6 +86,8 @@ export interface GateOutcome {
   decision?: GateResult["decision"]
   reasons: string[]
   attestation?: string
+  /** recorded | not_available | rejected | failed (absent = not attempted). */
+  intake?: string
   status: string
 }
 
@@ -236,6 +238,7 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
   // 4. Signature — Sigstore keyless, this workflow's identity. Skips are visible.
   let attestation: AttestationState
   let signed: SignResult | undefined
+  let intake: IntakeState = { kind: "not_attempted", why: inputs.dryRun ? "dry-run" : "unsigned" }
   const plan = planSigning({ dryRun: inputs.dryRun, eventName: context.eventName, payload: context.payload as never, env: deps.env })
   if (!plan.sign) {
     attestation = { kind: "skipped", reason: plan.reason, detail: plan.detail }
@@ -267,14 +270,20 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
       if (signed.storeError) {
         core.warning(`governed-run statement signed but NOT stored in GitHub (${signed.storeError}) — ${STORE_HINT}`)
       }
-      const intake = await submitBundleToIntake({
-        apiUrl: inputs.apiUrl,
-        apiKey: inputs.apiKey,
-        projectId: inputs.projectId,
-        sessionId: inputs.sessionId,
-        bundle: signed.bundle,
-      })
-      core.info(intake.message)
+      // Intake is reporting only: its outcome never touches the decision or the step.
+      if (!inputs.postAttestation) {
+        intake = { kind: "not_attempted", why: "post-attestation-false" }
+        core.info("post-attestation is false — the signed bundle was not sent to Machinaut")
+      } else {
+        const res = await submitBundleToIntake(
+          { apiUrl: inputs.apiUrl, apiKey: inputs.apiKey, projectId: inputs.projectId, sessionId: inputs.sessionId, bundle: signed.bundle },
+          { fetch: deps.fetch },
+        )
+        intake = intakeState(res)
+        outcome.intake = res.outcome
+        if (res.outcome === "recorded") core.info(res.message)
+        else core.notice(`machinaut attestation intake (${res.outcome}): ${res.message} — the signed attestation is unaffected`)
+      }
     } catch (err) {
       const message = err instanceof SigningError ? err.message : `signing failed: ${errMessage(err)}`
       attestation = { kind: "failed", message }
@@ -283,10 +292,11 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
     }
   }
   core.setOutput("attestation", outcome.attestation ?? "")
+  core.setOutput("intake", outcome.intake ?? "not_attempted")
 
   // 5. Verdict comment (sticky, updated in place).
   await postComment(
-    renderGateComment({ summary, result, policy, dryRun: inputs.dryRun, headSha, sessionUrl, attestation }),
+    renderGateComment({ summary, result, policy, dryRun: inputs.dryRun, headSha, sessionUrl, attestation, intake }),
   )
 
   // 6. The check itself.

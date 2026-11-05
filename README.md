@@ -153,6 +153,7 @@ jobs:
 | `require-bound-approvals` | `false` | Every granted hold must carry an ADR-0042 `action_representation_hash` (`sha256:<inputs_hash hex>`) — the approval is bound to the exact action. A truncated hold list fails this rule too. |
 | `max-sentinel-severity` | `warning` | Highest sentinel severity tolerated: `warning` → any `critical` fails; `info` → any `warning` or `critical` fails; `critical` → sentinels never fail. |
 | `allow-unreadable` | `false` | Below the `secret` ceiling the shipper withholds approval and sentinel records, so Machinaut reports them only as counts (`unreadable.approval_requests`, `unreadable.sentinel_alerts`) — a withheld critical alert would otherwise read as `critical: 0`. **Default: fail closed** — unreadable approval requests fail the hold rules, unreadable sentinel alerts fail the sentinel rule. `true` records them as a stated reason that does not fail. |
+| `post-attestation` | `true` | After signing, POST the Sigstore bundle to Machinaut's attestation intake (`/v1/projects/:p/sessions/:s/attestations`, project key) so the console can verify and label it. **Beta.** `false` skips the upload. The outcome never changes the decision or fails the step. |
 | `dry-run` | `false` | Evaluate, write the statement and comment — but **do not sign** and **never fail the step**. |
 | `fail-on-error` | `true` in gate mode | Infrastructure errors — Machinaut unreachable, an unsupported summary version, a signing failure, a comment failure — fail the step (fail closed). `false` downgrades them to warnings (fail open). |
 
@@ -168,6 +169,7 @@ signed**.
 | `decision` | `pass` or `fail` (empty if the gate could not evaluate). |
 | `reasons` | JSON array: failure reasons first, then any stated non-failing caveats (`allow-unreadable`). `[]` on a clean pass. |
 | `attestation` | `signed`, `signed-not-stored`, `skipped:dry-run`, `skipped:fork`, `skipped:permissions`, or `failed`. |
+| `intake` | `recorded`, `not_available` (this console has no intake yet), `rejected` (401/403/409/413), `failed`, or `not_attempted` (dry-run, unsigned, or `post-attestation: false`). Reporting only. |
 | `attestation-url` | The GitHub attestation page, when stored. |
 | `bundle-path` | The Sigstore bundle (JSON), when signed — for offline `gh attestation verify --bundle`. |
 | `statement-path` | The in-toto statement that was (or, unsigned, would be) signed — byte-identical to the signed payload. |
@@ -184,8 +186,12 @@ default, a failed step; never passed off as signed. If GitHub signs but refuses 
 attestation (missing `attestations: write`, or a private repo without Enterprise Cloud), the output is
 `signed-not-stored`, the bundle is still written to `bundle-path`, and the comment says so.
 
-The bundle is **not** sent to Machinaut yet: attestation intake + verification display is Track G
-slice G2 (**planned**).
+When signed, the bundle is also sent to Machinaut's attestation intake (`post-attestation`, default
+`true`; Track G slice G2, **beta**). The sticky comment reports only whether the upload happened
+(`Recorded in Machinaut: yes / not available on this console / rejected / failed / not attempted`);
+Machinaut's own verification status appears in the console, not here. The upload is display, never
+authority — a failed or unavailable intake changes neither the decision nor the step result, and the
+signature verifies without Machinaut.
 
 ### Make it a required check
 
