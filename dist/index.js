@@ -79610,11 +79610,19 @@ async function intake_submit(req, deps) {
             clearTimeout(timer);
         }
     };
-    let raw = await post(BUNDLE_CONTENT_TYPE);
-    if (raw.networkError !== undefined)
-        raw = await post(BUNDLE_CONTENT_TYPE); // one retry, network errors only
+    // One retry budget, shared across both content types, spent on network errors only.
+    let retried = false;
+    const attempt = async (contentType) => {
+        let r = await post(contentType);
+        if (r.networkError !== undefined && !retried) {
+            retried = true;
+            r = await post(contentType);
+        }
+        return r;
+    };
+    let raw = await attempt(BUNDLE_CONTENT_TYPE);
     if (raw.status === 415)
-        raw = await post("application/json");
+        raw = await attempt("application/json");
     return classify(raw);
 }
 function classify(raw) {

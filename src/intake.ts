@@ -90,9 +90,18 @@ async function submit(req: IntakeRequest, deps: { fetch?: typeof fetch; timeoutM
     }
   }
 
-  let raw = await post(BUNDLE_CONTENT_TYPE)
-  if (raw.networkError !== undefined) raw = await post(BUNDLE_CONTENT_TYPE) // one retry, network errors only
-  if (raw.status === 415) raw = await post("application/json")
+  // One retry budget, shared across both content types, spent on network errors only.
+  let retried = false
+  const attempt = async (contentType: string): Promise<Raw> => {
+    let r = await post(contentType)
+    if (r.networkError !== undefined && !retried) {
+      retried = true
+      r = await post(contentType)
+    }
+    return r
+  }
+  let raw = await attempt(BUNDLE_CONTENT_TYPE)
+  if (raw.status === 415) raw = await attempt("application/json")
   return classify(raw)
 }
 

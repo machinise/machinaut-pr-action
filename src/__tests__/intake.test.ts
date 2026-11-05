@@ -54,6 +54,13 @@ describe("submitBundleToIntake", () => {
     expect(f).toHaveBeenCalledTimes(2)
   })
 
+  it("a network error after the 415 fallback still gets the single retry", async () => {
+    const f = vi.fn().mockResolvedValueOnce(res(415, {})).mockRejectedValueOnce(new Error("reset")).mockResolvedValueOnce(res(201, {}))
+    expect((await run(f)).outcome).toBe("recorded")
+    expect(f).toHaveBeenCalledTimes(3)
+    expect(f.mock.calls[2]![1].headers["content-type"]).toBe("application/json")
+  })
+
   it("gives up after one retry and never throws", async () => {
     const f = vi.fn().mockRejectedValue(new Error("down"))
     const r = await run(f)
