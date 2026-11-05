@@ -1,5 +1,6 @@
 import type { GateResult, PredicatePolicy } from "./gate"
 import type { GovernanceSummary, HoldEvidence, HoldOutcome } from "./governance"
+import type { IntakeState } from "./intake"
 import { type SkipReason, STORE_HINT } from "./signing"
 
 /**
@@ -29,6 +30,8 @@ export interface GateCommentInput {
   headSha: string
   sessionUrl: string
   attestation: AttestationState
+  /** Defaults to not attempted (unsigned). */
+  intake?: IntakeState
 }
 
 /**
@@ -83,6 +86,8 @@ export function renderGateComment(input: GateCommentInput): string {
 
   parts.push("")
   parts.push(`**Attestation:** ${attestationLine(input.attestation)}`)
+  parts.push("")
+  parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`)
   parts.push("")
   parts.push(
     `**[Open the evidence in Machinaut →](${input.sessionUrl})**  ` +
@@ -187,6 +192,22 @@ function attestationLine(a: AttestationState): string {
       return `🚫 **unsigned (${a.reason})** — ${a.detail}.`
     case "failed":
       return `❌ **signing failed** — ${escapeMd(a.message)}. No attestation was produced for this run.`
+  }
+}
+
+/** Reports only that the upload happened. Machinaut verifies on its side and labels the result in the console. */
+function intakeLine(i: IntakeState): string {
+  switch (i.kind) {
+    case "recorded":
+      return "yes — uploaded; Machinaut verifies it on its side and shows the result in the console"
+    case "not_available":
+      return "not available on this console"
+    case "rejected":
+      return `rejected (${escapeMd(i.reason)})`
+    case "failed":
+      return i.status === 0 ? "failed (could not reach Machinaut)" : `failed (HTTP ${i.status})`
+    case "not_attempted":
+      return `not attempted (${i.why === "post-attestation-false" ? "post-attestation: false" : i.why})`
   }
 }
 
