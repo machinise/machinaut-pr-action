@@ -1,0 +1,72 @@
+# Example: gate agent-authored PRs on a signed governed-run attestation
+# (gate mode — BETA).
+#
+# Drop this in the CONSUMER repo at `.github/workflows/governed-run.yml`, then make
+# the check `machinaut / governed-run` required (README → "Make it a required
+# check"). Try it with `dry-run: true` first: the gate evaluates and comments but
+# never signs and never fails the step.
+#
+# Who decides what:
+#   - Machinaut serves the FACTS for the session (GET …/sessions/:s/governance).
+#   - THIS workflow evaluates your policy, decides pass/fail, and signs that decision
+#     with its own Sigstore identity. Machinaut never signs and never emits a verdict.
+#   - GitHub enforces the required check through your branch protection.
+#
+# Store your Machinaut project key as the `MACHINAUT_API_KEY` repo secret (read-only use).
+
+name: machinaut
+on:
+  pull_request:
+
+jobs:
+  governed-run: # → the check is named `machinaut / governed-run`
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # post/update the sticky verdict comment
+      id-token: write # Sigstore keyless signing with this workflow's own OIDC identity
+      attestations: write # store the signed attestation in this repo's attestation store
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Your agent runs and ships its Lodestar session to Machinaut; export the
+      #    id as a step output named `session-id`. (Illustrative — use your real
+      #    ship command.) No session → the gate skips as not-applicable.
+      - id: ship
+        env:
+          MACHINAUT_API_KEY: ${{ secrets.MACHINAUT_API_KEY }}
+        run: |
+          # ... run the agent, then `lodestar ship "$SESSION_ID"` ...
+          echo "session-id=$SESSION_ID" >> "$GITHUB_OUTPUT"
+
+      # 2) Evaluate, sign, comment — and fail this step on `decision: fail`.
+      #    `v2` is the intended floating tag for gate mode once it is released;
+      #    until then pin a commit SHA of this repo's main branch.
+      - id: gate
+        uses: machinise/machinaut-pr-action@v2
+        with:
+          mode: gate
+          machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
+          project-id: your-project-id
+          session-id: ${{ steps.ship.outputs.session-id }}
+          # Policy (defaults shown):
+          # require-holds-resolved: true    # every hold granted/denied with a host record
+          # require-bound-approvals: false  # every grant carries an ADR-0042 binding
+          # max-sentinel-severity: warning  # any critical sentinel fails
+          # allow-unreadable: false         # withheld approvals/alerts fail closed
+          # dry-run: true                   # evaluate + comment only: no signature, never fails
+          # fail-on-error: true             # gate default: API/signing/comment errors fail closed
+
+      # 3) Keep the evidence for auditors: the summary file is the sha256 subject
+      #    `gh attestation verify` checks; the bundle allows offline verification.
+      - name: Keep the governed-run evidence
+        if: always() && steps.gate.outputs.statement-path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: machinaut-governed-run
+          path: |
+            ${{ steps.gate.outputs.summary-path }}
+            ${{ steps.gate.outputs.statement-path }}
+            ${{ steps.gate.outputs.bundle-path }}
+          if-no-files-found: ignore
+          retention-days: 90

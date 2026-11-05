@@ -7,7 +7,51 @@ Notable changes to this action. Format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+Intended as **2.0.0** (floating tag `v2`) — not tagged or released yet. Gate mode
+asks for new job permissions and pins a signed predicate, so it gets its own major;
+comment mode is unchanged and `v1` consumers are unaffected. Gate mode is **beta**
+and has **not** been run against a live control plane: it needs the control plane's
+`GET …/sessions/:s/governance` route (`governance_summary@1`, Track G slice G0),
+which the hosted console does not serve yet.
+
+### Added
+
+- **Gate mode (beta)** — `mode: gate` (Track G, slice G1). Fetches the session's
+  governance summary with the project key, evaluates the repo's policy in CI,
+  builds an in-toto Statement v1 (predicate type
+  `https://machinaut.ai/attestation/governed-run/v1`, subjects = the PR head
+  commit + the evaluated summary's sha256), signs it Sigstore-keyless with the
+  workflow's own OIDC identity via `@actions/attest`, stores it in the repo's
+  GitHub attestation store, refreshes a sticky verdict comment, and **fails the
+  step on `decision: fail`**. Machinaut serves facts only — it never decides and
+  never signs.
+- Gate inputs: `mode`, `require-holds-resolved` (default `true`; `relay_only` /
+  `unavailable` holds and a truncated hold list fail), `require-bound-approvals`
+  (default `false`), `max-sentinel-severity` (default `warning`),
+  `allow-unreadable` (default `false`: records withheld below the `secret`
+  ceiling fail closed), `dry-run` (default `false`).
+- Gate outputs: `decision`, `reasons` (JSON), `attestation`
+  (`signed | signed-not-stored | skipped:dry-run | skipped:fork |
+  skipped:permissions | failed`), `attestation-url`, `bundle-path`,
+  `statement-path`, `summary-path`.
+- Signing is skipped — visibly, in the comment, the log and the outputs — on
+  dry-run, fork `pull_request` runs, and missing `id-token: write`; a signing
+  failure is reported as such and never passed off as signed.
+- `examples/governed-run-gate.yml`; README "Gate mode (beta)" section (permissions,
+  required-check setup, `gh attestation verify` recipe, candor).
+- A seam (`src/intake.ts`) for handing the bundle to Machinaut's attestation
+  intake (Track G, G2 — **planned**); it makes no network call yet.
+
+### Changed
+
+- `fail-on-error` default is now mode-dependent: still `false` in comment mode
+  (behaviour unchanged), `true` in gate mode, so a required check that could not
+  read the facts or produce its attestation does not go green.
+
+### Release tooling
+
+- The release workflow refuses a tag that differs from `src/version.ts`, the
+  version gate mode records in every signed statement (`gate.action`).
 
 ## [1.0.0] - 2026-07-21
 

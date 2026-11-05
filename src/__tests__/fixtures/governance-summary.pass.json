@@ -1,0 +1,39 @@
+{
+  "machinaut": {
+    "console": "https://console.machinaut.ai",
+    "project_id": "demo",
+    "session_id": "sess-demo",
+    "summary_version": "governance_summary@1",
+    "as_of": "2026-11-04T12:00:00.000Z"
+  },
+  "chain": {
+    "events": 143,
+    "readable": 139,
+    "redacted_commitments": 4,
+    "chain_digest": "sha256:1b4f0e9851971998e732078544c96b36c3d01cedf7caa332359d6f1d83567014",
+    "first_seq": 1,
+    "last_seq": 143
+  },
+  "holds": [
+    {
+      "request_id": "req-deploy-1",
+      "action_representation_hash": "sha256:60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752",
+      "outcome": "granted",
+      "evidence": "host_record",
+      "quorum": {
+        "k": 2,
+        "m": 3,
+        "record_digest": "sha256:fd61a03af4f77d870fc21e05e7e80678095c92d808cfb3b5c279ee04c74aca13"
+      }
+    },
+    {
+      "request_id": "req-drop-table-2",
+      "outcome": "denied",
+      "evidence": "host_record"
+    }
+  ],
+  "holds_truncated": false,
+  "sentinels": { "info": 3, "warning": 1, "critical": 0 },
+  "unreadable": { "approval_requests": 0, "sentinel_alerts": 0 },
+  "beta": true
+}

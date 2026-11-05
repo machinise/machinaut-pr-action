@@ -9,6 +9,10 @@ A GitHub Action that posts the **Machinaut agent post-mortem** on agent-authored
 > end-to-end against a **stubbed** API (create + idempotent update). It has **not yet been
 > exercised on a live agent-authored PR** — that run is the remaining validation before calling
 > it battle-tested.
+>
+> **[Gate mode](#gate-mode-beta) — beta, unreleased (intended `v2`):** evaluate a run's governance
+> facts against your policy, sign the decision with your CI's Sigstore identity, and fail a
+> required check. Not yet run against a live control plane.
 
 ## What it does
 
@@ -21,10 +25,10 @@ agent's evidence trail:
 - a **deep link** to the Machinaut console session, honestly labeled as **login-walled** (team
   members already in your org) — **not** a public post-mortem.
 
-The action is a **read-only API client**. It calls exactly one endpoint,
-`GET /v1/projects/:p/sessions/:s?report=1`, with your existing project key. It never runs the
-agent writer, and it holds no secrets of its own (you supply your Machinaut credential as a repo
-secret). See [Invariants](#invariants).
+The action is a **read-only API client**. In comment mode it calls exactly one endpoint,
+`GET /v1/projects/:p/sessions/:s?report=1`, with your existing project key (gate mode calls
+`GET …/sessions/:s/governance` instead). It never runs the agent writer, and it holds no secrets of
+its own (you supply your Machinaut credential as a repo secret). See [Invariants](#invariants).
 
 ## Usage
 
@@ -62,7 +66,8 @@ no-ops — no heuristic, no false positives.
 | `api-url` | no | `https://console.machinaut.ai` | Base origin of your Machinaut deployment (API + console). |
 | `console-url` | no | = `api-url` | Console origin for the deep link, if it differs from the API. |
 | `github-token` | no | `${{ github.token }}` | Token used to post/update the comment. |
-| `fail-on-error` | no | `false` | When `false`, problems log a warning and exit 0 so a non-critical evidence comment never red-Xes a PR. |
+| `fail-on-error` | no | `false` | When `false`, problems log a warning and exit 0 so a non-critical evidence comment never red-Xes a PR. (Gate mode defaults to `true` — see [Gate mode](#gate-mode-beta).) |
+| `mode` | no | `comment` | `comment` (this section) or `gate` ([beta](#gate-mode-beta)). |
 
 ### Outputs
 
@@ -72,6 +77,189 @@ no-ops — no heuristic, no false positives.
 | `comment-url` | `html_url` of the sticky comment (empty if skipped). |
 | `session-url` | The console deep link to the session. |
 | `status` | `created`, `updated`, or `skipped:<reason>`. |
+
+## Gate mode (beta)
+
+> **Status: beta, unreleased.** Gate mode is built and unit-tested on `main`, but it is not in a
+> tagged release yet (`v2` is the intended floating tag), and it needs a control plane that serves
+> `GET /v1/projects/:p/sessions/:s/governance` (`governance_summary@1`, itself **beta**). The hosted
+> console does not serve that route yet, so a live run against console.machinaut.ai is a follow-up.
+
+`mode: gate` turns the action into a **required check** for agent-authored PRs:
+*an agent PR merges only when your own CI has fetched the governance facts for the run that
+produced it, decided they meet your repo's bar, and signed that decision with your CI's identity.*
+
+```
+your CI (this action)                         Machinaut                       your kernel (Lodestar OSS)
+fetch the facts ───── GET …/governance ─────▶ serves facts only               adjudicates holds, verifies
+evaluate YOUR policy                          (never a merge verdict)         signatures, records quorum —
+build the in-toto statement                                                   all shipped as events
+SIGN it (Sigstore keyless, this workflow)
+pass / fail the check  ◀── GitHub branch protection enforces it
+```
+
+- **Facts come from Machinaut; the decision and the signature are yours.** The action evaluates
+  the summary against *your* inputs, decides, and signs with this workflow's GitHub OIDC identity
+  via [`@actions/attest`](https://github.com/actions/toolkit/tree/main/packages/attest). Machinaut
+  never signs and never emits "mergeable".
+- **The signature verifies without Machinaut** — see [Verify without Machinaut](#verify-without-machinaut).
+- **Only PRs with a shipped session are gated.** With an empty `session-id` the step skips as
+  not-applicable (and passes), exactly like comment mode: the gate cannot detect an agent-authored
+  PR that shipped nothing.
+
+### Permissions
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write   # the sticky verdict comment
+  id-token: write        # Sigstore keyless signing with this workflow's OIDC identity
+  attestations: write    # store the signed attestation in this repo's attestation store
+```
+
+GitHub artifact attestations need a **public repository or GitHub Enterprise Cloud**. On a private
+repo the toolkit signs with GitHub's own Sigstore instance (no public Rekor entry).
+
+### Usage
+
+Full workflow: [`examples/governed-run-gate.yml`](./examples/governed-run-gate.yml).
+
+```yaml
+name: machinaut
+on: pull_request
+jobs:
+  governed-run:                 # → check name `machinaut / governed-run`
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pull-requests: write, id-token: write, attestations: write }
+    steps:
+      - id: ship
+        run: echo "session-id=$SESSION_ID" >> "$GITHUB_OUTPUT"   # your agent + `lodestar ship`
+      - id: gate
+        uses: machinise/machinaut-pr-action@v2                    # intended tag; pin a main SHA until released
+        with:
+          mode: gate
+          machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
+          project-id: your-project-id
+          session-id: ${{ steps.ship.outputs.session-id }}
+          dry-run: true          # start here: evaluate + comment, never sign, never fail
+```
+
+### Gate inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `mode` | `comment` | `gate` turns this on. |
+| `require-holds-resolved` | `true` | Every hold must be `granted` or `denied` **with `evidence: host_record`** (your kernel shipped the record). `relay_only` and `unavailable` count as unresolved (plan D5). A truncated hold list (`holds_truncated: true`; the summary caps `holds[]` at 50) fails. |
+| `require-bound-approvals` | `false` | Every granted hold must carry an ADR-0042 `action_representation_hash` (`sha256:<inputs_hash hex>`) — the approval is bound to the exact action. A truncated hold list fails this rule too. |
+| `max-sentinel-severity` | `warning` | Highest sentinel severity tolerated: `warning` → any `critical` fails; `info` → any `warning` or `critical` fails; `critical` → sentinels never fail. |
+| `allow-unreadable` | `false` | Below the `secret` ceiling the shipper withholds approval and sentinel records, so Machinaut reports them only as counts (`unreadable.approval_requests`, `unreadable.sentinel_alerts`) — a withheld critical alert would otherwise read as `critical: 0`. **Default: fail closed** — unreadable approval requests fail the hold rules, unreadable sentinel alerts fail the sentinel rule. `true` records them as a stated reason that does not fail. |
+| `dry-run` | `false` | Evaluate, write the statement and comment — but **do not sign** and **never fail the step**. |
+| `fail-on-error` | `true` in gate mode | Infrastructure errors — Machinaut unreachable, an unsupported summary version, a signing failure, a comment failure — fail the step (fail closed). `false` downgrades them to warnings (fail open). |
+
+**Step outcome.** `decision: fail` always fails the step, whatever `fail-on-error` says — that is
+what makes the check meaningful. Infrastructure errors follow `fail-on-error`. `dry-run` never fails
+the step. When the facts can't be read the comment says so and **no decision is made and nothing is
+signed**.
+
+### Gate outputs
+
+| Output | Description |
+|---|---|
+| `decision` | `pass` or `fail` (empty if the gate could not evaluate). |
+| `reasons` | JSON array: failure reasons first, then any stated non-failing caveats (`allow-unreadable`). `[]` on a clean pass. |
+| `attestation` | `signed`, `signed-not-stored`, `skipped:dry-run`, `skipped:fork`, `skipped:permissions`, or `failed`. |
+| `attestation-url` | The GitHub attestation page, when stored. |
+| `bundle-path` | The Sigstore bundle (JSON), when signed — for offline `gh attestation verify --bundle`. |
+| `statement-path` | The in-toto statement that was (or, unsigned, would be) signed — byte-identical to the signed payload. |
+| `summary-path` | The canonical governance summary the gate evaluated (the statement's sha256 subject). |
+| `status`, `comment-id`, `comment-url`, `session-url` | As in comment mode (the gate posts its own sticky verdict comment). |
+
+### When signing is skipped — or fails
+
+Signing is skipped, and labelled **unsigned** in the comment, the log and `attestation`, in exactly
+three cases: **`dry-run`**, a **`pull_request` from a fork** (GitHub gives fork PR runs no OIDC token
+and no secrets), and **missing `id-token: write`** (warned, with the fix). Anything that goes wrong
+once signing starts is a **signing failure** — reported as `attestation: failed` and, under the gate
+default, a failed step; never passed off as signed. If GitHub signs but refuses to *store* the
+attestation (missing `attestations: write`, or a private repo without Enterprise Cloud), the output is
+`signed-not-stored`, the bundle is still written to `bundle-path`, and the comment says so.
+
+The bundle is **not** sent to Machinaut yet: attestation intake + verification display is Track G
+slice G2 (**planned**).
+
+### Make it a required check
+
+1. Commit the workflow (workflow `name: machinaut`, job `governed-run`) and let it run once on a PR,
+   so GitHub knows the check.
+2. **Settings → Rules → Rulesets** (or **Branches → Branch protection rules**) for your default
+   branch → **Require status checks to pass** → add **`governed-run`** — shown on PRs as
+   `machinaut / governed-run`.
+3. Recommended: also require the branch to be up to date, so the gated commit is the one that merges.
+
+GitHub enforces this rule; Machinaut cannot block (or unblock) a merge.
+
+### The statement
+
+An [in-toto Statement v1](https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md),
+predicate type `https://machinaut.ai/attestation/governed-run/v1`:
+
+- **Subjects:** (1) the PR head commit — `{"name": "<owner>/<repo>", "digest": {"gitCommit": "<sha>"}}`;
+  (2) the evidence document the gate evaluated — `{"name": "machinaut-governance-summary.json",
+  "digest": {"sha256": …}}`. The second subject exists because GitHub's attestation store and
+  `gh attestation verify` look attestations up by an artifact's sha256 and cannot match a
+  `gitCommit`-only subject; it adds no data (it is the predicate minus `gate`).
+- **Predicate:** the `governance_summary@1` facts verbatim — `machinaut` (console, project/session
+  ids, `as_of`), `chain` (event counts, redacted commitments, `chain_digest`, seq bounds), `holds[]`
+  (request id, ADR-0042 hash, outcome, evidence, ADR-0041 quorum `k`/`m`/`record_digest`),
+  `holds_truncated`, `sentinels` (counts by severity), `unreadable` (counts) — plus a `gate` block
+  written by this action: `action`, `policy`, `decision`, `reasons`.
+- **Privacy:** digests, ids, counts, enums and timestamps only — never payloads, prompts, approval
+  reason text or actor names. Unknown fields in the summary are dropped before signing (and logged;
+  the summary's own `beta: true` endpoint label is ignored silently),
+  and the action refuses to sign a predicate carrying any field outside this schema. Public-repo
+  statements land in the public Rekor transparency log.
+
+### Verify without Machinaut
+
+With the evidence files the example workflow uploads as an artifact (`machinaut-governed-run`):
+
+```bash
+gh attestation verify machinaut-governance-summary.json \
+  --repo <owner>/<repo> \
+  --predicate-type https://machinaut.ai/attestation/governed-run/v1 \
+  --signer-workflow <owner>/<repo>/.github/workflows/governed-run.yml
+```
+
+This checks — against GitHub and Sigstore, not Machinaut — that your workflow signed a governed-run
+statement over that exact summary. Then confirm *which commit* and *what decision* it covers (a
+signed `fail` verifies too):
+
+```bash
+gh attestation verify machinaut-governance-summary.json --repo <owner>/<repo> \
+  --predicate-type https://machinaut.ai/attestation/governed-run/v1 --format json \
+  --jq '.[].verificationResult.statement | {commit: .subject[0].digest.gitCommit, decision: .predicate.gate.decision}'
+```
+
+- **Offline:** add `--bundle governed-run.sigstore.json`.
+- **No summary file?** Rebuild it byte-for-byte from the signed statement:
+  `jq -cjS '.predicate | del(.gate)' governed-run.intoto.json > machinaut-governance-summary.json`
+  (from a bundle: `jq -r .dsseEnvelope.payload governed-run.sigstore.json | base64 -d | jq -cjS '.predicate | del(.gate)'`).
+- **The facts re-derive too:** `chain_digest` is recomputable from your own local NDJSON; the recipe
+  lives in the control-plane reference docs alongside the `/governance` route.
+
+### What the gate is *not*
+
+- It proves **what your CI asserted about what Machinaut held at `as_of`**, signed by your CI's
+  identity. It does not prove the agent *could not* have misbehaved, and it does not prove the event
+  log is complete (the shipper ships what the writer wrote; a writer bypass is invisible here).
+- Hash verification, approval signature verification, quorum adjudication, redaction and sentinel
+  detection are **[Lodestar](https://github.com/qmilab/lodestar) OSS** properties. Machinaut's value
+  here is the hosted summary, the predicate standard and this gate workflow (verification display
+  and the fleet view of attested PRs are G2, **planned**).
+- A `relay_only` hold is **not** a verified approval. A session with redacted records is attested by
+  commitment, not content. Records withheld below the `secret` ceiling are counted, not evaluated.
+- GitHub enforces the required check (branch protection is yours); Machinaut cannot block a merge
+  and never claims to.
 
 ## Why the link is login-walled (and Increment 2)
 
@@ -92,6 +280,10 @@ Releases follow [SemVer](https://semver.org/) and are tagged `vMAJOR.MINOR.PATCH
 
 - **Pin the major alias** — `machinise/machinaut-pr-action@v1` — to pick up fixes
   automatically. A release workflow re-points `v1` at each new `v1.x.y`.
+- **`v2` (intended, not yet tagged)** will carry gate mode: it adds a mode that asks for new job
+  permissions (`id-token: write`, `attestations: write`) and pins a signed predicate, so it gets its
+  own major. Comment mode is unchanged and `v1` consumers are unaffected. `src/version.ts` must match
+  the tag (gate mode records it in every statement); the release workflow enforces this.
 - **Pin an exact tag** (`@v1.0.0`) or a commit SHA if you want fully reproducible runs.
 
 Because a runner executes the committed `dist/` bundle directly, the release workflow
@@ -131,6 +323,9 @@ The full, ratified plan lives in the control-plane repo:
   adds hosting, the public link, and tenancy.
 - **Never parse `renderReport` markdown as data:** the preview is a verbatim quote only.
 - **Never host the writer:** this action is a read-only API client.
+- **Machinaut never signs and never decides (gate mode):** the facts come from Machinaut; the
+  decision is computed in your CI and signed with your CI's identity. No managed signing.
+- **Predicate privacy:** digests / ids / counts / outcomes only — no payloads, prompts or reasons.
 - **Positioning:** *"your team governs your agent fleet: approve, audit, prove."*
 
 ## License

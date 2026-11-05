@@ -57,18 +57,36 @@ export async function fetchSessionReport(
   },
   deps: { fetch?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<SessionReport> {
-  const doFetch = deps.fetch ?? fetch
-  const timeoutMs = deps.timeoutMs ?? 15_000
-  const base = normalizeBaseUrl(opts.apiUrl)
   const path = `/v1/projects/${encodeURIComponent(opts.projectId)}/sessions/${encodeURIComponent(
     opts.sessionId,
   )}?report=1`
+  const { status, body } = await getJson<SessionReport>({ apiUrl: opts.apiUrl, apiKey: opts.apiKey, path }, deps)
+  if (!body || typeof body !== "object" || !body.projection) {
+    throw new MachinautApiError(status, "unexpected_body", "Machinaut response had no projection")
+  }
+  return body
+}
+
+/**
+ * GET a read-only Machinaut route with the project key and parse the JSON body.
+ * Shared by comment mode (`…/sessions/:s?report=1`) and gate mode
+ * (`…/sessions/:s/governance`). Non-2xx → {@link MachinautApiError} carrying the
+ * API's structured `{ error, message }` when present; network failure / timeout →
+ * a status-0 error.
+ */
+export async function getJson<T>(
+  opts: { apiUrl: string; apiKey: string; path: string },
+  deps: { fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<{ status: number; body: T }> {
+  const doFetch = deps.fetch ?? fetch
+  const timeoutMs = deps.timeoutMs ?? 15_000
+  const base = normalizeBaseUrl(opts.apiUrl)
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   let res: Response
   try {
-    res = await doFetch(`${base}${path}`, {
+    res = await doFetch(`${base}${opts.path}`, {
       method: "GET",
       headers: {
         authorization: `Bearer ${opts.apiKey}`,
@@ -98,9 +116,6 @@ export async function fetchSessionReport(
     throw new MachinautApiError(res.status, code, `Machinaut returned ${res.status} (${code})${detail}`)
   }
 
-  const body = (await res.json()) as SessionReport
-  if (!body || typeof body !== "object" || !body.projection) {
-    throw new MachinautApiError(res.status, "unexpected_body", "Machinaut response had no projection")
-  }
-  return body
+  const body = (await res.json()) as T
+  return { status: res.status, body }
 }
