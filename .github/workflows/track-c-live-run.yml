@@ -1,0 +1,28 @@
+name: Track C live run
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - id: evidence
+        uses: machinise/machinaut-pr-action@v1
+        with:
+          machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
+          project-id: demo
+          session-id: sess-demo
+          fail-on-error: 'true'
+      - name: Print outputs
+        env:
+          STATUS: ${{ steps.evidence.outputs.status }}
+          COMMENT_URL: ${{ steps.evidence.outputs.comment-url }}
+          SESSION_URL: ${{ steps.evidence.outputs.session-url }}
+        run: |
+          echo "status=$STATUS"
+          echo "comment-url=$COMMENT_URL"
+          echo "session-url=$SESSION_URL"
