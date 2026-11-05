@@ -78845,6 +78845,8 @@ function isForkPullRequest(payload, eventName) {
     return head.toLowerCase() !== base.toLowerCase();
 }
 
+// EXTERNAL MODULE: external "node:crypto"
+var external_node_crypto_ = __nccwpck_require__(77598);
 // EXTERNAL MODULE: external "node:fs/promises"
 var promises_ = __nccwpck_require__(51455);
 ;// CONCATENATED MODULE: external "node:os"
@@ -79550,8 +79552,6 @@ async function submitBundleToIntake(_req) {
     };
 }
 
-// EXTERNAL MODULE: external "node:crypto"
-var external_node_crypto_ = __nccwpck_require__(77598);
 ;// CONCATENATED MODULE: ./src/version.ts
 /**
  * This build's release version, recorded in every governed-run statement as
@@ -79761,6 +79761,7 @@ function isNotEditable(err) {
 
 
 
+
 const HEAD_SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 async function runGate(inputs, deps) {
     const { core, context } = deps;
@@ -79880,7 +79881,10 @@ async function runGate(inputs, deps) {
         core.notice(`${CHECK_NAME}: ${n}`);
     // 3. Statement — written to disk whether or not it is signed.
     const statement = buildStatement({ owner, repo, headSha, summary, policy, decision: result.decision, reasons: result.reasons });
-    const outDir = (0,external_node_path_.join)(deps.env.RUNNER_TEMP || (0,external_node_os_namespaceObject.tmpdir)(), "machinaut-governed-run", safeSegment(inputs.sessionId));
+    // One directory PER INVOCATION: two gate steps in a job (e.g. two policies for
+    // one session) must not overwrite each other's signed evidence behind their outputs.
+    const invocation = `${safeSegment(inputs.sessionId)}-${(deps.uniqueId ?? external_node_crypto_.randomUUID)()}`;
+    const outDir = (0,external_node_path_.join)(deps.env.RUNNER_TEMP || (0,external_node_os_namespaceObject.tmpdir)(), "machinaut-governed-run", invocation);
     try {
         const summaryPath = (0,external_node_path_.join)(outDir, "machinaut-governance-summary.json");
         const statementPath = (0,external_node_path_.join)(outDir, "governed-run.intoto.json");

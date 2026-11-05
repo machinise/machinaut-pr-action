@@ -77,7 +77,8 @@ function harness(opts: {
     setOutput: vi.fn((k: string, v: string) => (outputs[k] = v)),
     setFailed: vi.fn(),
   }
-  const fetchMock = vi.fn().mockResolvedValue(jsonResponse(opts.status ?? 200, opts.body ?? rawSummary()))
+  // A fresh Response per call: a Response body can only be read once.
+  const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(opts.status ?? 200, opts.body ?? rawSummary()))
   const attest =
     opts.attest ?? vi.fn().mockResolvedValue({ bundle: { mediaType: "sigstore-bundle" }, certificate: "pem", tlogID: "555" })
   const files: Record<string, string> = {}
@@ -109,6 +110,7 @@ function harness(opts: {
     writeFile: async (p, d) => {
       files[p] = d
     },
+    uniqueId: () => "run1",
   }
   const lastBody = () => {
     const calls = [...createComment.mock.calls, ...updateComment.mock.calls]
@@ -137,7 +139,7 @@ describe("runGate — pass, signed", () => {
 
     // statement + summary + bundle written under RUNNER_TEMP, and the summary file
     // is exactly the sha256 subject `gh attestation verify` will check.
-    const dir = "/runner/tmp/machinaut-governed-run/sess-demo"
+    const dir = "/runner/tmp/machinaut-governed-run/sess-demo-run1"
     expect(h.outputs["statement-path"]).toBe(`${dir}/governed-run.intoto.json`)
     expect(h.outputs["bundle-path"]).toBe(`${dir}/governed-run.sigstore.json`)
     const statement = JSON.parse(h.files[`${dir}/governed-run.intoto.json`]!)
@@ -171,6 +173,22 @@ describe("runGate — pass, signed", () => {
     expect(h.updateComment).toHaveBeenCalledTimes(1)
     expect(h.updateComment.mock.calls[0]![0]).toMatchObject({ comment_id: 2 })
     expect(h.outputs.status).toBe("updated")
+  })
+})
+
+describe("runGate — evidence files", () => {
+  it("gives every invocation its own directory, so a second gate step never overwrites the first's evidence", async () => {
+    const h = harness()
+    delete h.deps.uniqueId // real per-invocation ids
+    await runGate(inputs(), h.deps)
+    const first = { ...h.outputs }
+    const firstStatement = h.files[first["statement-path"]!]
+    await runGate(inputs({ policy: { ...inputs().policy, maxSentinelSeverity: "info" } }), h.deps)
+    expect(h.outputs["statement-path"]).not.toBe(first["statement-path"])
+    expect(h.outputs["bundle-path"]).not.toBe(first["bundle-path"])
+    expect(h.files[first["statement-path"]!]).toBe(firstStatement)
+    expect(JSON.parse(h.files[first["statement-path"]!]!).predicate.gate.decision).toBe("pass")
+    expect(JSON.parse(h.files[h.outputs["statement-path"]!]!).predicate.gate.decision).toBe("fail")
   })
 })
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -76,6 +77,8 @@ export interface GateDeps {
   env: Record<string, string | undefined>
   fetch?: typeof fetch
   writeFile?: (path: string, data: string) => Promise<void>
+  /** Per-invocation suffix for the evidence directory (default: a random UUID). */
+  uniqueId?: () => string
 }
 
 /** What happened, for tests and logs. Outputs are the contract; this mirrors them. */
@@ -215,7 +218,10 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
 
   // 3. Statement — written to disk whether or not it is signed.
   const statement = buildStatement({ owner, repo, headSha, summary, policy, decision: result.decision, reasons: result.reasons })
-  const outDir = join(deps.env.RUNNER_TEMP || tmpdir(), "machinaut-governed-run", safeSegment(inputs.sessionId))
+  // One directory PER INVOCATION: two gate steps in a job (e.g. two policies for
+  // one session) must not overwrite each other's signed evidence behind their outputs.
+  const invocation = `${safeSegment(inputs.sessionId)}-${(deps.uniqueId ?? randomUUID)()}`
+  const outDir = join(deps.env.RUNNER_TEMP || tmpdir(), "machinaut-governed-run", invocation)
   try {
     const summaryPath = join(outDir, "machinaut-governance-summary.json")
     const statementPath = join(outDir, "governed-run.intoto.json")
