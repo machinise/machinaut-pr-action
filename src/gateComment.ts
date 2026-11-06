@@ -1,3 +1,4 @@
+import { MACHINAUT_INTRO_URL, withRef } from "./comment"
 import type { GateResult, PredicatePolicy } from "./gate"
 import type { GovernanceSummary, HoldEvidence, HoldOutcome } from "./governance"
 import type { IntakeState } from "./intake"
@@ -17,7 +18,8 @@ export const CHECK_NAME = "machinaut / governed-run"
 
 const LODESTAR_URL = "https://github.com/qmilab/lodestar"
 const ACTION_URL = "https://github.com/machinise/machinaut-pr-action"
-const GATE_DOCS_URL = `${ACTION_URL}#gate-mode-beta`
+const GATE_README_URL = `${ACTION_URL}#gate-mode-beta`
+const GATE_DOCS_URL = withRef("https://machinaut.ai/docs/attestation-gate")
 
 export type AttestationState =
   | { kind: "signed"; attestationUrl?: string; tlogId?: string; storeError?: string }
@@ -141,7 +143,7 @@ export function renderGateComment(input: GateCommentInput): string {
   parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`)
   parts.push("")
   parts.push(
-    `**[Open the evidence in Machinaut →](${input.sessionUrl})**  ` +
+    `**[Open the evidence in Machinaut →](${withRef(input.sessionUrl)})**  ` +
       "🔒 _Sign-in required — your team's console, not a public page._",
   )
   parts.push("")
@@ -164,7 +166,7 @@ export function renderGateErrorComment(input: { sessionUrl?: string; message: st
   ]
   if (input.sessionUrl) {
     parts.push("")
-    parts.push(`[Open the session in Machinaut →](${input.sessionUrl})  🔒 _Sign-in required._`)
+    parts.push(`[Open the session in Machinaut →](${withRef(input.sessionUrl)})  🔒 _Sign-in required._`)
   }
   parts.push("")
   parts.push("---")
@@ -275,8 +277,9 @@ function intakeLine(i: IntakeState): string {
 function footer(): string {
   return (
     `<sub>Gate mode is **beta**. Facts served by Machinaut; the decision and the signature are made by this ` +
-    `workflow, never by Machinaut. [How to verify](${GATE_DOCS_URL}) · posted by ` +
-    `<a href="${ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.</sub>`
+    `workflow, never by Machinaut. [How to verify](${GATE_DOCS_URL}) (<a href="${GATE_README_URL}">action README</a>) · posted by ` +
+    `<a href="${ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.<br>` +
+    `What is Machinaut? <a href="${MACHINAUT_INTRO_URL}">machinaut.ai</a></sub>`
   )
 }
 

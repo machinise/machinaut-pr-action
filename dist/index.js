@@ -78616,6 +78616,19 @@ const STICKY_MARKER = "<!-- machinaut-pr-action:v1 -->";
 /** Attribution + candor links, kept in one place. */
 const LODESTAR_URL = "https://github.com/qmilab/lodestar";
 const ACTION_URL = "https://github.com/machinise/machinaut-pr-action";
+/** Funnel tag on every Machinaut link the action emits (issue 15). */
+const REF_PARAM = "ref=pr-comment";
+/** Public product page; `?ref=` sits before the `#` so the anchor still resolves. */
+const MACHINAUT_INTRO_URL = `https://machinaut.ai/?${REF_PARAM}#agent-prs`;
+/** Add `?ref=pr-comment` to a URL (before any fragment), keeping existing query. */
+function withRef(url) {
+    const hash = url.indexOf("#");
+    const base = hash === -1 ? url : url.slice(0, hash);
+    const frag = hash === -1 ? "" : url.slice(hash);
+    if (/[?&]ref=pr-comment(&|$)/.test(base))
+        return url;
+    return `${base}${base.includes("?") ? "&" : "?"}${REF_PARAM}${frag}`;
+}
 /** How much of the OSS report markdown we quote as a teaser. */
 const TEASER_MAX_LINES = 16;
 const TEASER_MAX_CHARS = 1400;
@@ -78643,7 +78656,7 @@ function renderComment({ report, sessionUrl }) {
         "Machinaut to review exactly what the agent observed, believed, decided, and did — every " +
         "step linked back to the append-only event log.");
     parts.push("");
-    parts.push(`**[Open this session in Machinaut →](${sessionUrl})**  ` +
+    parts.push(`**[Open this session in Machinaut →](${withRef(sessionUrl)})**  ` +
         "🔒 _Sign-in required — visible to team members already in your Machinaut org. " +
         "This is the internal console, **not** a public post-mortem link._");
     const teaser = buildTeaser(report.report_markdown);
@@ -78679,7 +78692,8 @@ function renderFooter() {
     return (`<sub>The chain, report, and projection are produced by ` +
         `<a href="${LODESTAR_URL}">Lodestar</a> (open source, Apache-2.0) from the agent's ` +
         `append-only event log — Machinaut adds hosting, tenancy, and the governance surface. ` +
-        `Posted by <a href="${ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.</sub>`);
+        `Posted by <a href="${ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.<br>` +
+        `What is Machinaut? <a href="${MACHINAUT_INTRO_URL}">machinaut.ai</a></sub>`);
 }
 /**
  * Quote the top of the OSS report markdown, bounded by line and char count.
@@ -79305,6 +79319,7 @@ function errMessage(err) {
 ;// CONCATENATED MODULE: ./src/gateComment.ts
 
 
+
 /**
  * The gate's sticky comment. A separate marker from comment mode's, so a repo
  * that runs both modes keeps one evidence comment AND one verdict comment rather
@@ -79315,7 +79330,8 @@ const GATE_STICKY_MARKER = "<!-- machinaut-pr-action:gate:v1 -->";
 const CHECK_NAME = "machinaut / governed-run";
 const gateComment_LODESTAR_URL = "https://github.com/qmilab/lodestar";
 const gateComment_ACTION_URL = "https://github.com/machinise/machinaut-pr-action";
-const GATE_DOCS_URL = `${gateComment_ACTION_URL}#gate-mode-beta`;
+const GATE_README_URL = `${gateComment_ACTION_URL}#gate-mode-beta`;
+const GATE_DOCS_URL = withRef("https://machinaut.ai/docs/attestation-gate");
 /** Shown when the recipe's `--signer-workflow` could not be read from a certificate. */
 const WORKFLOW_REF_FALLBACK_NOTE = "(derived from the workflow ref; may differ for reusable workflows)";
 /**
@@ -79388,7 +79404,7 @@ function renderGateComment(input) {
     parts.push("");
     parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`);
     parts.push("");
-    parts.push(`**[Open the evidence in Machinaut →](${input.sessionUrl})**  ` +
+    parts.push(`**[Open the evidence in Machinaut →](${withRef(input.sessionUrl)})**  ` +
         "🔒 _Sign-in required — your team's console, not a public page._");
     parts.push("");
     parts.push(...CANDOR_LINES);
@@ -79409,7 +79425,7 @@ function renderGateErrorComment(input) {
     ];
     if (input.sessionUrl) {
         parts.push("");
-        parts.push(`[Open the session in Machinaut →](${input.sessionUrl})  🔒 _Sign-in required._`);
+        parts.push(`[Open the session in Machinaut →](${withRef(input.sessionUrl)})  🔒 _Sign-in required._`);
     }
     parts.push("");
     parts.push("---");
@@ -79503,8 +79519,9 @@ function intakeLine(i) {
 }
 function footer() {
     return (`<sub>Gate mode is **beta**. Facts served by Machinaut; the decision and the signature are made by this ` +
-        `workflow, never by Machinaut. [How to verify](${GATE_DOCS_URL}) · posted by ` +
-        `<a href="${gateComment_ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.</sub>`);
+        `workflow, never by Machinaut. [How to verify](${GATE_DOCS_URL}) (<a href="${GATE_README_URL}">action README</a>) · posted by ` +
+        `<a href="${gateComment_ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.<br>` +
+        `What is Machinaut? <a href="${MACHINAUT_INTRO_URL}">machinaut.ai</a></sub>`);
 }
 function abbrevDigest(d) {
     const hex = d.startsWith("sha256:") ? d.slice(7) : d;

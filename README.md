@@ -1,10 +1,10 @@
 # machinaut-pr-action
 
-A GitHub Action that posts the **Machinaut agent post-mortem** on agent-authored PRs —
-*"this PR was written by an agent; here's exactly what it did and why."* Part of
-[Machinaut](https://console.machinaut.ai)'s distribution / PLG work (Track C, build-loop #2).
+A GitHub Action for [Machinaut](https://machinaut.ai): it posts governance evidence from the
+session behind a PR; in gate mode it fails the check when the repo's gate policy is not met,
+signed by the repo's own CI.
 
-> **Status: Increment 1 shipped — `v1` tagged; Marketplace listing pending.** The action is
+> **Status: comment mode shipped — `v1` tagged; Marketplace listing pending.** The action is
 > implemented and unit-tested (CI green: typecheck · test · build · check-dist), and verified
 > end-to-end against a **stubbed** API (create + idempotent update). Comment mode has **not
 > yet been exercised on a live agent-authored PR** — that run is the remaining validation before
@@ -52,7 +52,7 @@ steps:
       session-id: ${{ steps.ship.outputs.session-id }}
 ```
 
-**Trigger (plan D1/D2):** the *presence of a shipped session is the signal* that a PR is
+**Trigger:** the *presence of a shipped session is the signal* that a PR is
 agent-authored. When `session-id` is empty (nothing shipped this run), the action cleanly
 no-ops — no heuristic, no false positives.
 
@@ -153,7 +153,7 @@ jobs:
 | Input | Default | Meaning |
 |---|---|---|
 | `mode` | `comment` | `gate` turns this on. |
-| `require-holds-resolved` | `true` | Every hold must be `granted` or `denied` **with `evidence: host_record`** (your kernel shipped the record). `relay_only` and `unavailable` count as unresolved (plan D5). A truncated hold list (`holds_truncated: true`; the summary caps `holds[]` at 50) fails. |
+| `require-holds-resolved` | `true` | Every hold must be `granted` or `denied` **with `evidence: host_record`** (your kernel shipped the record). `relay_only` and `unavailable` count as unresolved . A truncated hold list (`holds_truncated: true`; the summary caps `holds[]` at 50) fails. |
 | `require-bound-approvals` | `false` | Every granted hold must carry an ADR-0042 `action_representation_hash` (`sha256:<inputs_hash hex>`) — the approval is bound to the exact action. A truncated hold list fails this rule too. |
 | `max-sentinel-severity` | `warning` | Highest sentinel severity tolerated: `warning` → any `critical` fails; `info` → any `warning` or `critical` fails; `critical` → sentinels never fail. |
 | `allow-unreadable` | `false` | Below the `secret` ceiling the shipper withholds approval and sentinel records, so Machinaut reports them only as counts (`unreadable.approval_requests`, `unreadable.sentinel_alerts`) — a withheld critical alert would otherwise read as `critical: 0`. **Default: fail closed** — unreadable approval requests fail the hold rules, unreadable sentinel alerts fail the sentinel rule. `true` records them as a stated reason that does not fail. |
@@ -192,7 +192,7 @@ attestation (missing `attestations: write`, or a private repo without Enterprise
 `signed-not-stored`, the bundle is still written to `bundle-path`, and the comment says so.
 
 When signed, the bundle is also sent to Machinaut's attestation intake (`post-attestation`, default
-`true`; Track G slice G2, **beta**). The sticky comment reports only whether the upload happened
+`true`, **beta**). The sticky comment reports only whether the upload happened
 (`Recorded in Machinaut: yes / not available on this console / rejected / failed / not attempted`);
 Machinaut's own verification status appears in the console, not here. The upload is display, never
 authority — a failed or unavailable intake changes neither the decision nor the step result, and the
@@ -303,24 +303,24 @@ not a bug. Gate mode remains **beta**.
 - Hash verification, approval signature verification, quorum adjudication, redaction and sentinel
   detection are **[Lodestar](https://github.com/qmilab/lodestar) OSS** properties. Machinaut's value
   here is the hosted summary, the predicate standard and this gate workflow (verification display
-  and the fleet view of attested PRs are G2, **planned**).
+  and the fleet view of attested PRs are **planned**).
 - A `relay_only` hold is **not** a verified approval. A session with redacted records is attested by
   commitment, not content. Records withheld below the `secret` ceiling are counted, not evaluated.
 - GitHub enforces the required check (branch protection is yours); Machinaut cannot block a merge
   and never claims to.
 
-## Why the link is login-walled (and Increment 2)
+## Why the link is login-walled (and a public share, planned)
 
 Machinaut deliberately forbids a **machine** credential from minting a **public** share — the
-posture that "a leaked ingest key can't publish to the internet." So Increment 1 links to the
+posture that "a leaked ingest key can't publish to the internet." So today the comment links to the
 login-walled console session, honestly labeled. This still drives real adoption: a PR's reviewers
 are the exact devs already in your tenant.
 
-- **Increment 1 (this repo, shipped here):** read `GET …/sessions/:s?report=1` with the project
+- **Today (shipped):** read `GET …/sessions/:s?report=1` with the project
   key → post the sticky comment with a verdict teaser + console deep link.
-- **Increment 2 (later):** once the control plane grows a CI-scoped, mint-only *publish token*,
+- **Later (planned):** once the control plane grows a CI-scoped, mint-only *publish token*,
   swap the console link for a real public `/s/:token` share so an unauthenticated onlooker can
-  click through. That's a backend slice tracked in the control-plane plan.
+  click through. That needs a backend change first.
 
 ## Versioning
 
@@ -352,10 +352,7 @@ npm run all         # typecheck + test + build
 workflow's *check-dist* step fails if the bundle drifts from `src/`, so always `npm run build`
 and commit after changing source.
 
-The full, ratified plan lives in the control-plane repo:
-**`machinaut/docs/plans/track-c-pr-comment-bot.md`** (§3 Increment 1, §4 ratified decisions).
-
-## Ratified decisions (plan §4)
+## Design decisions
 
 - **Trigger:** a Lodestar session was shipped for the PR head SHA (no heuristic).
 - **Session binding:** the CI step exports the session id it just shipped.
@@ -364,7 +361,7 @@ The full, ratified plan lives in the control-plane repo:
 
 ## Invariants (from Machinaut `CLAUDE.md`)
 
-- **Candor:** label shipped / beta / planned honestly; the Increment-1 console link is named
+- **Candor:** label shipped / beta / planned honestly; the console link is named
   as login-walled, not sold as a public post-mortem.
 - **Never claim an OSS feature as Machinaut's:** the chain / report / projection are Lodestar
   OSS ([`@qmilab/lodestar-trace`](https://github.com/qmilab/lodestar), Apache-2.0); Machinaut
