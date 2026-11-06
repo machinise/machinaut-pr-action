@@ -1,0 +1,57 @@
+# Track G live-run test: exercises gate mode against the live console. Not for merge.
+name: machinaut
+on:
+  pull_request:
+
+jobs:
+  governed-run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: gate
+        uses: machinise/machinaut-pr-action@v2
+        with:
+          mode: gate
+          machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
+          project-id: demo
+          session-id: sess-demo-3
+          dry-run: ${{ vars.GATE_DRY_RUN || 'true' }}
+
+      - name: Print gate outputs
+        if: always()
+        env:
+          DECISION: ${{ steps.gate.outputs.decision }}
+          REASONS: ${{ steps.gate.outputs.reasons }}
+          ATTESTATION: ${{ steps.gate.outputs.attestation }}
+          INTAKE: ${{ steps.gate.outputs.intake }}
+          ATT_URL: ${{ steps.gate.outputs.attestation-url }}
+        run: |
+          echo "decision=$DECISION"
+          echo "reasons=$REASONS"
+          echo "attestation=$ATTESTATION"
+          echo "intake=$INTAKE"
+          echo "attestation-url=$ATT_URL"
+
+      - name: Keep the evidence
+        if: always() && steps.gate.outputs.summary-path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: machinaut-governed-run
+          path: |
+            ${{ steps.gate.outputs.summary-path }}
+            ${{ steps.gate.outputs.statement-path }}
+            ${{ steps.gate.outputs.bundle-path }}
+          if-no-files-found: ignore
+
+      - name: Console attestations[]
+        if: always()
+        env:
+          KEY: ${{ secrets.MACHINAUT_API_KEY }}
+        run: |
+          curl -sS -H "Authorization: Bearer $KEY" https://console.machinaut.ai/v1/projects/demo/sessions/sess-demo-3 | jq '.attestations'
