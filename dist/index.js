@@ -79098,13 +79098,14 @@ function assertPredicatePrivacy(predicate, path = "predicate") {
 ;// CONCATENATED MODULE: ./src/signerIdentity.ts
 
 /**
- * `https://<host>/<owner>/<repo>/.github/workflows/<file>@<ref>`. The file may not
- * contain `/` or `@` (GitHub runs workflows only from `.github/workflows/` itself);
- * the ref is everything after the first `@` that follows the file. Control
- * characters, whitespace in the ref and backticks are refused outright: the result
- * is pasted into a fenced shell recipe in a PR comment.
+ * `https://<host>/<owner>/<repo>/.github/workflows/<file>.yml|.yaml@<ref>`. The file
+ * may not contain `/` (GitHub runs workflows only from `.github/workflows/` itself)
+ * and ends at the first `.yml@` / `.yaml@` (GitHub runs only those extensions), so an
+ * `@` inside the file name (`ci@v2.yml`) or the ref (`refs/tags/pkg@1.2.3`) stays
+ * where it belongs. Control characters, whitespace in the ref and backticks are
+ * refused outright: the result is pasted into a fenced shell recipe in a PR comment.
  */
-const WORKFLOW_SAN = /^https:\/\/([A-Za-z0-9.-]+(?::[0-9]{1,5})?)\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(\.github\/workflows\/[^/@\x00-\x1f\x7f`]+)@([^\s\x00-\x1f\x7f`]+)$/;
+const WORKFLOW_SAN = /^https:\/\/([A-Za-z0-9.-]+(?::[0-9]{1,5})?)\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(\.github\/workflows\/[^/\x00-\x1f\x7f`]+?\.ya?ml)@([^\s\x00-\x1f\x7f`]+)$/;
 /** The bundle's leaf (signing) certificate as DER, or undefined (key-signed or malformed). */
 function leafCertificateDer(bundle) {
     const vm = bundle?.verificationMaterial;

@@ -72,7 +72,19 @@ describe("parseWorkflowSan", () => {
     expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/x.yml@refs/heads/main\n```")).toBeUndefined()
     expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/x.yml@refs/heads/ma in")).toBeUndefined()
   })
-  it("needs a workflow file directly under .github/workflows and a ref", () => {
+  it("keeps an `@` inside the file name or the ref where it belongs", () => {
+    expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/ci@v2.yml@refs/heads/main")).toMatchObject({
+      signerWorkflow: "a/b/.github/workflows/ci@v2.yml",
+      ref: "refs/heads/main",
+    })
+    expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/ci.yaml@refs/tags/pkg@1.2.3")).toMatchObject({
+      signerWorkflow: "a/b/.github/workflows/ci.yaml",
+      ref: "refs/tags/pkg@1.2.3",
+    })
+  })
+  it("needs a .yml/.yaml workflow file directly under .github/workflows and a ref", () => {
+    expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/x.json@refs/heads/main")).toBeUndefined()
+    expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/sub/x.yml@refs/heads/main")).toBeUndefined()
     expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/x.yml")).toBeUndefined()
     expect(parseWorkflowSan("https://github.com/a/b/.github/workflows/@refs/heads/main")).toBeUndefined()
     expect(parseWorkflowSan("https://github.com/a/b/other/x.yml@refs/heads/main")).toBeUndefined()
