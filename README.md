@@ -6,11 +6,11 @@ A GitHub Action that posts the **Machinaut agent post-mortem** on agent-authored
 
 > **Status: Increment 1 shipped — `v1` tagged; Marketplace listing pending.** The action is
 > implemented and unit-tested (CI green: typecheck · test · build · check-dist), and verified
-> end-to-end against a **stubbed** API (create + idempotent update). It has **not yet been
-> exercised on a live agent-authored PR** — that run is the remaining validation before calling
-> it battle-tested.
+> end-to-end against a **stubbed** API (create + idempotent update). Comment mode has **not
+> yet been exercised on a live agent-authored PR** — that run is the remaining validation before
+> calling it battle-tested. Gate mode, by contrast, has run live (see below).
 >
-> **[Gate mode](#gate-mode-beta) — beta, unreleased (intended `v2`):** evaluate a run's governance
+> **[Gate mode](#gate-mode-beta) — beta, released in `v2.0.0` (floating tag `v2`):** evaluate a run's governance
 > facts against your policy, sign the decision with your CI's Sigstore identity, and fail a
 > required check. First live run: see [below](#first-live-run-2026-11-06).
 
@@ -80,10 +80,14 @@ no-ops — no heuristic, no false positives.
 
 ## Gate mode (beta)
 
-> **Status: beta, unreleased.** Gate mode is built and unit-tested on `main`, but it is not in a
-> tagged release yet (`v2` is the intended floating tag), and it needs a control plane that serves
-> `GET /v1/projects/:p/sessions/:s/governance` (`governance_summary@1`, itself **beta**). The hosted
-> console does not serve that route yet, so a live run against console.machinaut.ai is a follow-up.
+> **Status: beta, released in `v2.0.0` (floating tag `v2`).** Gate mode needs a control plane that
+> serves `GET /v1/projects/:p/sessions/:s/governance` (`governance_summary@1`, itself **beta**); the
+> hosted console (v0.5.0) serves it and the attestation route. Live-verified on 2026-11-06 with both
+> outcomes: `fail` in [PR #9](https://github.com/machinise/machinaut-pr-action/pull/9) and `pass`
+> (signed, recorded, console `verified`) in
+> [PR #11](https://github.com/machinise/machinaut-pr-action/pull/11), with its
+> [attestation](https://github.com/machinise/machinaut-pr-action/attestations/64302344). Still
+> **beta**.
 
 `mode: gate` turns the action into a **required check** for agent-authored PRs:
 *an agent PR merges only when your own CI has fetched the governance facts for the run that
@@ -135,7 +139,7 @@ jobs:
       - id: ship
         run: echo "session-id=$SESSION_ID" >> "$GITHUB_OUTPUT"   # your agent + `lodestar ship`
       - id: gate
-        uses: machinise/machinaut-pr-action@v2                    # intended tag; pin a main SHA until released
+        uses: machinise/machinaut-pr-action@v2                    # floating tag; pin an exact tag or SHA for reproducibility
         with:
           mode: gate
           machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
@@ -324,7 +328,7 @@ Releases follow [SemVer](https://semver.org/) and are tagged `vMAJOR.MINOR.PATCH
 
 - **Pin the major alias** — `machinise/machinaut-pr-action@v1` — to pick up fixes
   automatically. A release workflow re-points `v1` at each new `v1.x.y`.
-- **`v2` (intended, not yet tagged)** will carry gate mode: it adds a mode that asks for new job
+- **`v2` (released as `v2.0.0`, beta)** carries gate mode: it adds a mode that asks for new job
   permissions (`id-token: write`, `attestations: write`) and pins a signed predicate, so it gets its
   own major. Comment mode is unchanged and `v1` consumers are unaffected. `src/version.ts` must match
   the tag (gate mode records it in every statement); the release workflow enforces this.

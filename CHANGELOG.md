@@ -5,7 +5,7 @@ Notable changes to this action. Format follows
 [SemVer](https://semver.org/). Consumers should pin the moving major alias
 (`@v1`), which the release workflow re-points at each `v1.x.y` release.
 
-## [Unreleased] — intended 2.0.1
+## 2.0.1 — 2026-11-06
 
 ### Fixed
 
