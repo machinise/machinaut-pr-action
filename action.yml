@@ -140,6 +140,13 @@ outputs:
     description: 'Gate mode: the GitHub attestation page, when the signed attestation was stored.'
   bundle-path:
     description: 'Gate mode: path to the Sigstore bundle (JSON) for offline verification, when signed.'
+  signer-identity:
+    description: >-
+      Gate mode: the signing certificate's SAN URI
+      (`https://github.com/<owner>/<repo>/.github/workflows/<file>@<ref>`), when
+      signed — the workflow that actually signed (for a reusable workflow, the
+      reusable one, not the caller). Your Machinaut console's signer-identity pin
+      must equal it exactly. Empty when the bundle has no readable certificate.
   statement-path:
     description: 'Gate mode: path to the in-toto statement that was (or, unsigned, would be) signed.'
   summary-path:

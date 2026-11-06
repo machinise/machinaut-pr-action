@@ -172,6 +172,7 @@ signed**.
 | `intake` | `recorded`, `not_available` (this console has no intake yet), `rejected` (401/403/409/413), `failed`, or `not_attempted` (dry-run, unsigned, or `post-attestation: false`). Reporting only. |
 | `attestation-url` | The GitHub attestation page, when stored. |
 | `bundle-path` | The Sigstore bundle (JSON), when signed — for offline `gh attestation verify --bundle`. |
+| `signer-identity` | The signing certificate's SAN URI, when signed — `https://github.com/<owner>/<repo>/.github/workflows/<file>@<ref>`, the workflow that actually signed (for a [reusable workflow](#reusable-workflows), the reusable one). Your Machinaut console's signer-identity pin must equal it exactly. Empty when the bundle has no readable certificate. |
 | `statement-path` | The in-toto statement that was (or, unsigned, would be) signed — byte-identical to the signed payload. |
 | `summary-path` | The canonical governance summary the gate evaluated (the statement's sha256 subject). |
 | `status`, `comment-id`, `comment-url`, `session-url` | As in comment mode (the gate posts its own sticky verdict comment). |
@@ -260,7 +261,26 @@ gh attestation verify machinaut-governance-summary.json --repo <owner>/<repo> \
 
 When the run is signed, the sticky comment carries this same recipe as one fenced line (with your
 repo and workflow filled in) and names the `machinaut-governance-summary.json` file in the
-`machinaut-governed-run` artifact to verify.
+`machinaut-governed-run` artifact to verify. Its `--signer-workflow` is **read from the signing
+certificate** — the SAN Fulcio issued from the job's `job_workflow_ref` claim, which is exactly
+what `gh attestation verify --signer-workflow` matches — not guessed from `GITHUB_WORKFLOW_REF`.
+The comment also shows that SAN as **Signer identity** (and the action outputs it as
+`signer-identity`). Only if a bundle carries no readable certificate does the recipe fall back to
+`GITHUB_WORKFLOW_REF`, and the comment then says it is *derived from the workflow ref; may differ
+for reusable workflows*.
+
+#### Reusable workflows
+
+If the gate step runs inside a [reusable workflow](https://docs.github.com/actions/sharing-automations/reusing-workflows),
+the certificate names the **reusable** workflow (`<owner>/<repo>/.github/workflows/<reusable>.yml@<ref
+it was called at>`), not the caller — while `GITHUB_WORKFLOW_REF` names the caller. So:
+
+- `gh attestation verify` needs `--signer-workflow <owner>/<repo>/.github/workflows/<reusable>.yml`
+  (the comment's recipe already says this); `--repo` stays the repo the PR is in.
+- The Machinaut console's signer-identity pin (**beta**) is matched exactly against the SAN, so it
+  must name the **reusable workflow's file** and the ref it was called at (e.g. `refs/heads/main`
+  or `refs/tags/v1`) — not the caller workflow. Copy both from the comment's **Signer identity**
+  line or the `signer-identity` output.
 
 ### First live run (2026-11-06)
 

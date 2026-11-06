@@ -9,7 +9,10 @@ import {
   type GateCommentInput,
   renderGateComment,
   renderGateErrorComment,
+  WORKFLOW_REF_FALLBACK_NOTE,
 } from "../gateComment"
+import { parseWorkflowSan } from "../signerIdentity"
+import { REUSABLE_SAN } from "./fixtures/cert"
 import { HEAD_SHA, summary } from "./fixtures/summary"
 
 const POLICY = { require_holds_resolved: true, require_bound_approvals: false, max_sentinel_severity: "warning" as const, allow_unreadable: false }
@@ -43,6 +46,66 @@ describe("renderGateComment", () => {
       expect(body).toContain(`\`\`\`bash\n${expected}\n\`\`\``)
       expect(body).toContain("`machinaut-governed-run` artifact")
     }
+  })
+
+  describe("signer identity (issue #12)", () => {
+    const signer = parseWorkflowSan(REUSABLE_SAN)!
+    // GITHUB_WORKFLOW_REF names the caller; the certificate names the reusable workflow.
+    const callerVerify = { repo: "acme/widgets", signer, signerWorkflow: "acme/widgets/.github/workflows/ci.yml" }
+
+    it("uses the certificate's workflow for --signer-workflow, never the caller's", () => {
+      const body = render({ verify: callerVerify })
+      expect(body).toContain(
+        "--signer-workflow acme/shared-workflows/.github/workflows/governed-run.yml\n```",
+      )
+      expect(body).not.toContain("workflows/ci.yml")
+      expect(body).not.toContain(WORKFLOW_REF_FALLBACK_NOTE)
+    })
+
+    it("shows the SAN in the verdict block and says the console pin must equal it", () => {
+      const body = render({ verify: callerVerify })
+      expect(body).toContain(
+        `**Signer identity:** \`${REUSABLE_SAN}\` — read from the signing certificate. ` +
+          "Your Machinaut console's identity pin (beta) must equal it exactly: workflow " +
+          "`https://github.com/acme/shared-workflows/.github/workflows/governed-run.yml`, ref `refs/heads/main`.",
+      )
+      // above the verify recipe, below the attestation line
+      const at = body.indexOf("**Attestation:**")
+      const id = body.indexOf("**Signer identity:**")
+      expect(at).toBeGreaterThan(-1)
+      expect(id).toBeGreaterThan(at)
+      expect(body.indexOf("**Verify without Machinaut**")).toBeGreaterThan(id)
+    })
+
+    it("points a PR-merge ref at the console's refs/pull/*/merge pin", () => {
+      const pr = parseWorkflowSan("https://github.com/acme/widgets/.github/workflows/governed-run.yml@refs/pull/9/merge")!
+      expect(render({ verify: { repo: "acme/widgets", signer: pr } })).toContain(
+        "ref `refs/pull/9/merge` (or `refs/pull/*/merge` to cover every PR).",
+      )
+    })
+
+    it("fallback: no certificate → the workflow-ref derivation, labelled as such", () => {
+      const body = render({ verify: { repo: "acme/widgets", signerWorkflow: "acme/widgets/.github/workflows/ci.yml" } })
+      expect(body).toContain("--signer-workflow acme/widgets/.github/workflows/ci.yml\n```")
+      expect(body).toContain(
+        "`--signer-workflow` (derived from the workflow ref; may differ for reusable workflows): " +
+          "the bundle carried no signing certificate to read it from.",
+      )
+      expect(body).not.toContain("**Signer identity:**")
+    })
+
+    it("neither: a visible placeholder, no fallback claim", () => {
+      const body = render({ verify: { repo: "acme/widgets" } })
+      expect(body).toContain("--signer-workflow <owner>/<repo>/.github/workflows/<workflow>.yml")
+      expect(body).not.toContain(WORKFLOW_REF_FALLBACK_NOTE)
+    })
+
+    it("never shows a signer identity for an unsigned or failed run", () => {
+      expect(render({ attestation: { kind: "skipped", reason: "dry-run", detail: "x" }, verify: callerVerify })).not.toContain(
+        "Signer identity",
+      )
+      expect(render({ attestation: { kind: "failed", message: "x" }, verify: callerVerify })).not.toContain("Signer identity")
+    })
   })
 
   it("shell-quotes an unusual workflow path", () => {

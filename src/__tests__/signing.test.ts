@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { isForkPullRequest } from "../events"
 import { githubStore, planSigning, SigningError, signStatement } from "../signing"
 import { buildStatement } from "../statement"
+import { bundleV03, keySignedBundle, REUSABLE_SAN, selfSignedCert } from "./fixtures/cert"
 import { HEAD_SHA, summary } from "./fixtures/summary"
 
 const OIDC = { ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.example", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "t" }
@@ -87,6 +88,24 @@ describe("signStatement (@actions/attest mocked)", () => {
     expect(res.bundle).toBe(bundle)
     expect(res.attestationUrl).toBeUndefined()
     expect(res.storeError).toBe("HTTP 403: Resource not accessible by integration")
+  })
+
+  it("reads the signer identity off the signed bundle's own certificate", async () => {
+    const signedBundle = bundleV03(selfSignedCert([{ uri: REUSABLE_SAN }]))
+    const attest = vi.fn().mockResolvedValue({ bundle: signedBundle, certificate: "pem" })
+    const res = await signStatement(statement, { attest, store: vi.fn().mockResolvedValue(1) }, opts)
+    expect(res.signer).toEqual({
+      san: REUSABLE_SAN,
+      workflowUrl: "https://github.com/acme/shared-workflows/.github/workflows/governed-run.yml",
+      signerWorkflow: "acme/shared-workflows/.github/workflows/governed-run.yml",
+      ref: "refs/heads/main",
+    })
+  })
+
+  it("leaves the signer unset when the bundle carries no certificate", async () => {
+    const attest = vi.fn().mockResolvedValue({ bundle: keySignedBundle(), certificate: "" })
+    const res = await signStatement(statement, { attest, store: vi.fn().mockResolvedValue(1) }, opts)
+    expect(res).not.toHaveProperty("signer")
   })
 
   it("raises a SigningError (never a silent pass) when signing itself fails", async () => {

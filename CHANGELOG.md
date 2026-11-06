@@ -5,6 +5,28 @@ Notable changes to this action. Format follows
 [SemVer](https://semver.org/). Consumers should pin the moving major alias
 (`@v1`), which the release workflow re-points at each `v1.x.y` release.
 
+## [Unreleased] — intended 2.0.1
+
+### Fixed
+
+- Gate mode, reusable workflows (#12): the sticky comment's `gh attestation verify
+  … --signer-workflow` recipe is now read from the bundle's own signing
+  certificate (its SAN URI, which Fulcio issues from the job's
+  `job_workflow_ref`), instead of from `GITHUB_WORKFLOW_REF`. Inside a reusable
+  workflow the two differ — `GITHUB_WORKFLOW_REF` names the caller — so the old
+  recipe could fail to verify. Only a bundle with no readable certificate falls
+  back to `GITHUB_WORKFLOW_REF`, and the comment then labels the value "(derived
+  from the workflow ref; may differ for reusable workflows)".
+
+### Added
+
+- Gate output `signer-identity`: the signing certificate's SAN URI
+  (`https://github.com/<owner>/<repo>/.github/workflows/<file>@<ref>`), when
+  signed. The verdict comment shows it as **Signer identity** and says that the
+  Machinaut console's signer-identity pin (beta) must equal it exactly. The
+  README documents that for a reusable workflow the pin must name the reusable
+  workflow's file.
+
 ## [2.0.0] - 2026-11-06
 
 Floating tag `v2`. Gate mode
