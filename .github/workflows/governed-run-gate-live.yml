@@ -21,7 +21,7 @@ jobs:
           machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
           project-id: demo
           session-id: sess-demo-3
-          dry-run: ${{ vars.GATE_DRY_RUN || 'true' }}
+          dry-run: 'false'
 
       - name: Print gate outputs
         if: always()
