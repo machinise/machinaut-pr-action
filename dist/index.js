@@ -79095,7 +79095,113 @@ function assertPredicatePrivacy(predicate, path = "predicate") {
     }
 }
 
+;// CONCATENATED MODULE: ./src/signerIdentity.ts
+
+/**
+ * `https://<host>/<owner>/<repo>/.github/workflows/<file>.yml|.yaml@<ref>`. The file
+ * may not contain `/` (GitHub runs workflows only from `.github/workflows/` itself)
+ * and ends at the first `.yml@` / `.yaml@` (GitHub runs only those extensions), so an
+ * `@` inside the file name (`ci@v2.yml`) or the ref (`refs/tags/pkg@1.2.3`) stays
+ * where it belongs. Control characters, whitespace in the ref and backticks are
+ * refused outright: the result is pasted into a fenced shell recipe in a PR comment.
+ */
+const WORKFLOW_SAN = /^https:\/\/([A-Za-z0-9.-]+(?::[0-9]{1,5})?)\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(\.github\/workflows\/[^/\x00-\x1f\x7f`]+?\.ya?ml)@([^\s\x00-\x1f\x7f`]+)$/;
+/** The bundle's leaf (signing) certificate as DER, or undefined (key-signed or malformed). */
+function leafCertificateDer(bundle) {
+    const vm = bundle?.verificationMaterial;
+    if (!vm || typeof vm !== "object")
+        return undefined;
+    // Bundle v0.3 carries the leaf alone; v0.1/v0.2 carry a chain whose first entry is the leaf.
+    const raw = vm.certificate?.rawBytes ?? vm.x509CertificateChain?.certificates?.[0]?.rawBytes;
+    if (typeof raw !== "string" || raw === "")
+        return undefined;
+    const der = Buffer.from(raw, "base64");
+    return der.length > 0 ? der : undefined;
+}
+/**
+ * The signer identity from the bundle's signing certificate, or undefined when the
+ * bundle has no certificate, it does not parse, or its SAN is not a GitHub Actions
+ * workflow URI. Never throws.
+ */
+function signerIdentityFromBundle(bundle) {
+    const der = leafCertificateDer(bundle);
+    if (!der)
+        return undefined;
+    let san;
+    try {
+        san = new external_node_crypto_.X509Certificate(der).subjectAltName;
+    }
+    catch {
+        return undefined;
+    }
+    for (const uri of sanUris(san)) {
+        const identity = parseWorkflowSan(uri);
+        if (identity)
+            return identity;
+    }
+    return undefined;
+}
+/** Split a SAN URI into the workflow and the ref; undefined unless it is a workflow URI. */
+function parseWorkflowSan(san) {
+    const m = WORKFLOW_SAN.exec(san);
+    if (!m)
+        return undefined;
+    const [, host, owner, repo, path, ref] = m;
+    const workflow = `${owner}/${repo}/${path}`;
+    return {
+        san,
+        workflowUrl: `https://${host}/${workflow}`,
+        signerWorkflow: host.toLowerCase() === "github.com" ? workflow : `${host}/${workflow}`,
+        ref,
+    };
+}
+/**
+ * The `URI:` entries of Node's `X509Certificate.subjectAltName` string. Entries are
+ * `TYPE:value` joined by `", "`; Node writes a value that contains `,` `"` `\` `'`
+ * or a control character as a JSON string literal, so a comma inside a URI cannot be
+ * mistaken for a separator.
+ */
+function sanUris(subjectAltName) {
+    const out = [];
+    if (!subjectAltName)
+        return out;
+    let i = 0;
+    const s = subjectAltName;
+    while (i < s.length) {
+        const colon = s.indexOf(":", i);
+        if (colon === -1)
+            break;
+        const type = s.slice(i, colon);
+        let value;
+        let next;
+        if (s[colon + 1] === '"') {
+            // A JSON string literal: find its closing quote, honouring backslash escapes.
+            let j = colon + 2;
+            while (j < s.length && s[j] !== '"')
+                j += s[j] === "\\" ? 2 : 1;
+            try {
+                value = JSON.parse(s.slice(colon + 1, j + 1));
+            }
+            catch {
+                return out;
+            }
+            next = j + 1;
+        }
+        else {
+            const sep = s.indexOf(", ", colon + 1);
+            value = sep === -1 ? s.slice(colon + 1) : s.slice(colon + 1, sep);
+            next = sep === -1 ? s.length : sep;
+        }
+        if (type === "URI")
+            out.push(value);
+        // Skip the ", " separator.
+        i = s.startsWith(", ", next) ? next + 2 : s.length;
+    }
+    return out;
+}
+
 ;// CONCATENATED MODULE: ./src/signing.ts
+
 
 function planSigning(args) {
     if (args.dryRun) {
@@ -79159,6 +79265,11 @@ async function signStatement(statement, deps, opts) {
         throw new SigningError(`Sigstore signing failed: ${errMessage(err)}`);
     }
     const result = { bundle: attestation.bundle };
+    // Who signed, as the certificate says — not as GITHUB_WORKFLOW_REF guesses: for a
+    // reusable workflow the two differ, and the certificate is what verifiers match.
+    const signer = signerIdentityFromBundle(attestation.bundle);
+    if (signer)
+        result.signer = signer;
     if (attestation.tlogID)
         result.tlogId = attestation.tlogID;
     try {
@@ -79205,6 +79316,8 @@ const CHECK_NAME = "machinaut / governed-run";
 const gateComment_LODESTAR_URL = "https://github.com/qmilab/lodestar";
 const gateComment_ACTION_URL = "https://github.com/machinise/machinaut-pr-action";
 const GATE_DOCS_URL = `${gateComment_ACTION_URL}#gate-mode-beta`;
+/** Shown when the recipe's `--signer-workflow` could not be read from a certificate. */
+const WORKFLOW_REF_FALLBACK_NOTE = "(derived from the workflow ref; may differ for reusable workflows)";
 /**
  * Candor (plan §2.5), condensed for the check output. Load-bearing: what the gate
  * proves and does not prove; `relay_only` ≠ verified; the verification itself is
@@ -79257,12 +79370,20 @@ function renderGateComment(input) {
     parts.push("");
     parts.push(`**Attestation:** ${attestationLine(input.attestation)}`);
     if (input.attestation.kind === "signed" && input.verify) {
+        const { signer } = input.verify;
+        if (signer) {
+            parts.push("");
+            parts.push(signerLine(signer));
+        }
         parts.push("");
         parts.push(`**Verify without Machinaut** — download the \`${SUMMARY_SUBJECT_NAME}\` file from this run's ` +
             `\`${EVIDENCE_ARTIFACT}\` artifact${input.attestation.storeError ? " (plus `governed-run.sigstore.json`, since GitHub did not store it)" : ""}, then:`);
         parts.push("```bash");
-        parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow, Boolean(input.attestation.storeError)));
+        parts.push(verifyRecipe(input.verify.repo, signer?.signerWorkflow ?? input.verify.signerWorkflow, Boolean(input.attestation.storeError)));
         parts.push("```");
+        if (!signer && input.verify.signerWorkflow) {
+            parts.push(`\`--signer-workflow\` ${WORKFLOW_REF_FALLBACK_NOTE}: the bundle carried no signing certificate to read it from.`);
+        }
     }
     parts.push("");
     parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`);
@@ -79357,6 +79478,13 @@ function attestationLine(a) {
         case "failed":
             return `❌ **signing failed** — ${escapeMd(a.message)}. No attestation was produced for this run.`;
     }
+}
+/** The certificate SAN — the identity the console's pin is matched against, exactly. */
+function signerLine(signer) {
+    const prHint = /^refs\/pull\/[0-9]+\/merge$/.test(signer.ref) ? ` (or \`refs/pull/*/merge\` to cover every PR)` : "";
+    return (`**Signer identity:** ${code(signer.san)} — read from the signing certificate. ` +
+        `Your Machinaut console's identity pin (beta) must equal it exactly: workflow ${code(signer.workflowUrl)}, ` +
+        `ref ${code(signer.ref)}${prHint}.`);
 }
 /** Reports only that the upload happened. Machinaut verifies on its side and labels the result in the console. */
 function intakeLine(i) {
@@ -80087,6 +80215,14 @@ async function runGate(inputs, deps) {
             }
             if (signed.attestationUrl)
                 core.setOutput("attestation-url", signed.attestationUrl);
+            if (signed.signer) {
+                core.setOutput("signer-identity", signed.signer.san);
+                core.info(`signer identity (signing certificate SAN): ${signed.signer.san}`);
+            }
+            else {
+                core.notice("could not read a signer identity from the bundle's signing certificate — the verify recipe's " +
+                    "--signer-workflow is derived from GITHUB_WORKFLOW_REF instead and may differ for reusable workflows");
+            }
             core.info(`governed-run statement signed via Sigstore${signed.tlogId ? ` (Rekor log index ${signed.tlogId})` : ""}` +
                 `${signed.attestationUrl ? `: ${signed.attestationUrl}` : ""}`);
             if (signed.storeError) {
@@ -80126,7 +80262,7 @@ async function runGate(inputs, deps) {
         sessionUrl,
         attestation,
         intake,
-        verify: { repo: `${owner}/${repo}`, signerWorkflow: signerWorkflowFromEnv(deps.env) },
+        verify: { repo: `${owner}/${repo}`, signer: signed?.signer, signerWorkflow: signerWorkflowFromEnv(deps.env) },
     }));
     // 6. The check itself.
     if (result.decision === "fail") {
@@ -80162,7 +80298,12 @@ async function defaultWriteFile(path, data) {
     await (0,promises_.mkdir)((0,external_node_path_.join)(path, ".."), { recursive: true });
     await (0,promises_.writeFile)(path, data, "utf8");
 }
-/** `owner/repo/.github/workflows/x.yml` from GITHUB_WORKFLOW_REF (`…@refs/heads/main` stripped). */
+/**
+ * FALLBACK ONLY: `owner/repo/.github/workflows/x.yml` from GITHUB_WORKFLOW_REF
+ * (`…@refs/heads/main` stripped), for a bundle with no readable certificate. Inside a
+ * reusable workflow this names the CALLER, while the certificate (and every verifier)
+ * names the reusable workflow — so the certificate's SAN always wins (issue #12).
+ */
 function signerWorkflowFromEnv(env) {
     const ref = env.GITHUB_WORKFLOW_REF;
     if (!ref)

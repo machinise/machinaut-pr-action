@@ -275,6 +275,15 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
         infra("write-failed", `could not write the Sigstore bundle: ${errMessage(err)}`)
       }
       if (signed.attestationUrl) core.setOutput("attestation-url", signed.attestationUrl)
+      if (signed.signer) {
+        core.setOutput("signer-identity", signed.signer.san)
+        core.info(`signer identity (signing certificate SAN): ${signed.signer.san}`)
+      } else {
+        core.notice(
+          "could not read a signer identity from the bundle's signing certificate — the verify recipe's " +
+            "--signer-workflow is derived from GITHUB_WORKFLOW_REF instead and may differ for reusable workflows",
+        )
+      }
       core.info(
         `governed-run statement signed via Sigstore${signed.tlogId ? ` (Rekor log index ${signed.tlogId})` : ""}` +
           `${signed.attestationUrl ? `: ${signed.attestationUrl}` : ""}`,
@@ -317,7 +326,7 @@ export async function runGate(inputs: Inputs, deps: GateDeps): Promise<GateOutco
       sessionUrl,
       attestation,
       intake,
-      verify: { repo: `${owner}/${repo}`, signerWorkflow: signerWorkflowFromEnv(deps.env) },
+      verify: { repo: `${owner}/${repo}`, signer: signed?.signer, signerWorkflow: signerWorkflowFromEnv(deps.env) },
     }),
   )
 
@@ -357,7 +366,12 @@ async function defaultWriteFile(path: string, data: string): Promise<void> {
   await writeFile(path, data, "utf8")
 }
 
-/** `owner/repo/.github/workflows/x.yml` from GITHUB_WORKFLOW_REF (`…@refs/heads/main` stripped). */
+/**
+ * FALLBACK ONLY: `owner/repo/.github/workflows/x.yml` from GITHUB_WORKFLOW_REF
+ * (`…@refs/heads/main` stripped), for a bundle with no readable certificate. Inside a
+ * reusable workflow this names the CALLER, while the certificate (and every verifier)
+ * names the reusable workflow — so the certificate's SAN always wins (issue #12).
+ */
 function signerWorkflowFromEnv(env: Record<string, string | undefined>): string | undefined {
   const ref = env.GITHUB_WORKFLOW_REF
   if (!ref) return undefined

@@ -1,5 +1,6 @@
 import type { Attestation, AttestOptions, SerializedBundle } from "@actions/attest"
 import { type ForkPayload, isForkPullRequest } from "./events"
+import { type SignerIdentity, signerIdentityFromBundle } from "./signerIdentity"
 import type { Statement } from "./statement"
 
 /**
@@ -53,6 +54,9 @@ export type StoreFn = (bundle: SerializedBundle) => Promise<string | number | un
 
 export interface SignResult {
   bundle: SerializedBundle
+  /** The identity read off the bundle's own signing certificate (its SAN). Absent
+   *  when the bundle carries no readable certificate. */
+  signer?: SignerIdentity
   /** Rekor log index (public-good Sigstore only; private repos use GitHub's instance). */
   tlogId?: string
   /** GitHub attestation id, when the store accepted it. */
@@ -109,6 +113,10 @@ export async function signStatement(
   }
 
   const result: SignResult = { bundle: attestation.bundle }
+  // Who signed, as the certificate says — not as GITHUB_WORKFLOW_REF guesses: for a
+  // reusable workflow the two differ, and the certificate is what verifiers match.
+  const signer = signerIdentityFromBundle(attestation.bundle)
+  if (signer) result.signer = signer
   if (attestation.tlogID) result.tlogId = attestation.tlogID
 
   try {

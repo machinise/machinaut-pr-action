@@ -1,6 +1,7 @@
 import type { GateResult, PredicatePolicy } from "./gate"
 import type { GovernanceSummary, HoldEvidence, HoldOutcome } from "./governance"
 import type { IntakeState } from "./intake"
+import type { SignerIdentity } from "./signerIdentity"
 import { PREDICATE_TYPE, SUMMARY_SUBJECT_NAME } from "./statement"
 import { type SkipReason, STORE_HINT } from "./signing"
 
@@ -33,9 +34,18 @@ export interface GateCommentInput {
   attestation: AttestationState
   /** Defaults to not attempted (unsigned). */
   intake?: IntakeState
-  /** `owner/repo` and the signing workflow path (`owner/repo/.github/workflows/x.yml`), for the verify recipe. */
-  verify?: { repo: string; signerWorkflow?: string }
+  /**
+   * For the verify recipe: `owner/repo`, plus who signed. `signer` is read off the
+   * bundle's signing certificate and wins; `signerWorkflow`
+   * (`owner/repo/.github/workflows/x.yml`, from GITHUB_WORKFLOW_REF) is the fallback
+   * for a bundle with no readable certificate — and is labelled as such, since for a
+   * reusable workflow it names the caller, not the workflow that signed.
+   */
+  verify?: { repo: string; signer?: SignerIdentity; signerWorkflow?: string }
 }
+
+/** Shown when the recipe's `--signer-workflow` could not be read from a certificate. */
+export const WORKFLOW_REF_FALLBACK_NOTE = "(derived from the workflow ref; may differ for reusable workflows)"
 
 /**
  * Candor (plan §2.5), condensed for the check output. Load-bearing: what the gate
@@ -106,14 +116,26 @@ export function renderGateComment(input: GateCommentInput): string {
   parts.push("")
   parts.push(`**Attestation:** ${attestationLine(input.attestation)}`)
   if (input.attestation.kind === "signed" && input.verify) {
+    const { signer } = input.verify
+    if (signer) {
+      parts.push("")
+      parts.push(signerLine(signer))
+    }
     parts.push("")
     parts.push(
       `**Verify without Machinaut** — download the \`${SUMMARY_SUBJECT_NAME}\` file from this run's ` +
         `\`${EVIDENCE_ARTIFACT}\` artifact${input.attestation.storeError ? " (plus `governed-run.sigstore.json`, since GitHub did not store it)" : ""}, then:`,
     )
     parts.push("```bash")
-    parts.push(verifyRecipe(input.verify.repo, input.verify.signerWorkflow, Boolean(input.attestation.storeError)))
+    parts.push(
+      verifyRecipe(input.verify.repo, signer?.signerWorkflow ?? input.verify.signerWorkflow, Boolean(input.attestation.storeError)),
+    )
     parts.push("```")
+    if (!signer && input.verify.signerWorkflow) {
+      parts.push(
+        `\`--signer-workflow\` ${WORKFLOW_REF_FALLBACK_NOTE}: the bundle carried no signing certificate to read it from.`,
+      )
+    }
   }
   parts.push("")
   parts.push(`**Recorded in Machinaut:** ${intakeLine(input.intake ?? { kind: "not_attempted", why: "unsigned" })}`)
@@ -222,6 +244,16 @@ function attestationLine(a: AttestationState): string {
     case "failed":
       return `❌ **signing failed** — ${escapeMd(a.message)}. No attestation was produced for this run.`
   }
+}
+
+/** The certificate SAN — the identity the console's pin is matched against, exactly. */
+function signerLine(signer: SignerIdentity): string {
+  const prHint = /^refs\/pull\/[0-9]+\/merge$/.test(signer.ref) ? ` (or \`refs/pull/*/merge\` to cover every PR)` : ""
+  return (
+    `**Signer identity:** ${code(signer.san)} — read from the signing certificate. ` +
+    `Your Machinaut console's identity pin (beta) must equal it exactly: workflow ${code(signer.workflowUrl)}, ` +
+    `ref ${code(signer.ref)}${prHint}.`
+  )
 }
 
 /** Reports only that the upload happened. Machinaut verifies on its side and labels the result in the console. */

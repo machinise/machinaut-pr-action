@@ -5,6 +5,7 @@ import { GATE_STICKY_MARKER } from "../gateComment"
 import { type GateContext, type GateDeps, type GateGitHubApi, runGate } from "../gateRun"
 import type { Inputs } from "../inputs"
 import type { StickyComment } from "../sticky"
+import { bundleV03, CALLER_WORKFLOW_REF, keySignedBundle, REUSABLE_SAN, selfSignedCert } from "./fixtures/cert"
 import { HEAD_SHA, rawSummary } from "./fixtures/summary"
 
 const OIDC = { ACTIONS_ID_TOKEN_REQUEST_URL: "https://token.example", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "t", RUNNER_TEMP: "/runner/tmp" }
@@ -179,6 +180,45 @@ describe("runGate — pass, signed", () => {
     expect(h.updateComment).toHaveBeenCalledTimes(1)
     expect(h.updateComment.mock.calls[0]![0]).toMatchObject({ comment_id: 2 })
     expect(h.outputs.status).toBe("updated")
+  })
+})
+
+describe("runGate — signer identity comes from the certificate (issue #12)", () => {
+  const env = { ...OIDC, GITHUB_WORKFLOW_REF: CALLER_WORKFLOW_REF }
+
+  it("reusable workflow: recipe + signer-identity name the reusable workflow, not GITHUB_WORKFLOW_REF's caller", async () => {
+    const bundle = bundleV03(selfSignedCert([{ uri: REUSABLE_SAN }]))
+    const h = harness({ env, attest: vi.fn().mockResolvedValue({ bundle, certificate: "pem", tlogID: "1" }) })
+    await runGate(inputs(), h.deps)
+
+    expect(h.outputs["signer-identity"]).toBe(REUSABLE_SAN)
+    expect(h.core.info.mock.calls.flat().join("\n")).toContain(`signer identity (signing certificate SAN): ${REUSABLE_SAN}`)
+    const body = h.lastBody()
+    expect(body).toContain("--signer-workflow acme/shared-workflows/.github/workflows/governed-run.yml")
+    expect(body).not.toContain("workflows/ci.yml")
+    expect(body).toContain(`**Signer identity:** \`${REUSABLE_SAN}\``)
+    expect(body).not.toContain("derived from the workflow ref")
+    // the same bundle is what is written and uploaded
+    expect(JSON.parse(h.files[h.outputs["bundle-path"]!]!)).toEqual(bundle)
+  })
+
+  it("no certificate in the bundle: falls back to GITHUB_WORKFLOW_REF and says so", async () => {
+    const h = harness({ env, attest: vi.fn().mockResolvedValue({ bundle: keySignedBundle(), certificate: "" }) })
+    const out = await runGate(inputs(), h.deps)
+
+    expect(out.attestation).toBe("signed")
+    expect(h.outputs["signer-identity"]).toBeUndefined()
+    expect(h.core.notice.mock.calls.flat().join("\n")).toMatch(/derived from GITHUB_WORKFLOW_REF.*reusable workflows/)
+    const body = h.lastBody()
+    expect(body).toContain("--signer-workflow acme/widgets/.github/workflows/ci.yml")
+    expect(body).toContain("(derived from the workflow ref; may differ for reusable workflows)")
+    expect(body).not.toContain("**Signer identity:**")
+  })
+
+  it("unsigned runs set no signer-identity", async () => {
+    const h = harness({ env })
+    await runGate(inputs({ dryRun: true }), h.deps)
+    expect(h.outputs["signer-identity"]).toBeUndefined()
   })
 })
 
