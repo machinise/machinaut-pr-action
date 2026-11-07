@@ -78970,7 +78970,7 @@ function pushCapped(into, items, overflow) {
  * `gate.action` (plan §2.2). Bump it in the same commit that prepares a release:
  * the release workflow refuses to alias a tag whose version does not match.
  */
-const ACTION_VERSION = "2.0.1";
+const ACTION_VERSION = "2.0.2";
 const ACTION_REPOSITORY = "machinise/machinaut-pr-action";
 const ACTION_REF = `${ACTION_REPOSITORY}@v${ACTION_VERSION}`;
 
