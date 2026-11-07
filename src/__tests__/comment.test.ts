@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildTeaser, renderComment, STICKY_MARKER, type Teaser, teaserNote } from "../comment"
+import { buildTeaser, renderComment, withRef, STICKY_MARKER, type Teaser, teaserNote } from "../comment"
 import type { SessionReport } from "../machinaut"
 
 const REPORT_MD = [
@@ -42,7 +42,7 @@ describe("renderComment — invariants are load-bearing in the copy", () => {
   })
 
   it("links to the console session and labels it login-walled, not public (candor #4)", () => {
-    expect(body).toContain(`(${SESSION_URL})`)
+    expect(body).toContain(`(${SESSION_URL}?ref=pr-comment)`)
     expect(body.toLowerCase()).toContain("sign-in required")
     expect(body.toLowerCase()).toContain("not** a public post-mortem".toLowerCase())
   })
@@ -151,5 +151,17 @@ describe("renderComment with an oversized single-line report", () => {
     })
     expect(body).toContain("preview truncated")
     expect(body.length).toBeLessThan(3000) // nowhere near the 8000-char line
+  })
+})
+
+describe("funnel links (issue 15)", () => {
+  it("tags the session link and adds the footer intro link, ref before the anchor", () => {
+    const body = renderComment({ report, sessionUrl: SESSION_URL })
+    expect(body).toContain(`](${SESSION_URL}?ref=pr-comment)`)
+    expect(body).toContain('What is Machinaut? <a href="https://machinaut.ai/?ref=pr-comment#agent-prs">machinaut.ai</a>')
+  })
+  it("withRef keeps queries and fragments, and is idempotent", () => {
+    expect(withRef("https://x.test/a?b=1#f")).toBe("https://x.test/a?b=1&ref=pr-comment#f")
+    expect(withRef(withRef("https://x.test/a"))).toBe("https://x.test/a?ref=pr-comment")
   })
 })

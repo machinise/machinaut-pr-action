@@ -13,6 +13,20 @@ export const STICKY_MARKER = "<!-- machinaut-pr-action:v1 -->"
 const LODESTAR_URL = "https://github.com/qmilab/lodestar"
 const ACTION_URL = "https://github.com/machinise/machinaut-pr-action"
 
+/** Funnel tag on every Machinaut link the action emits (issue 15). */
+export const REF_PARAM = "ref=pr-comment"
+/** Public product page; `?ref=` sits before the `#` so the anchor still resolves. */
+export const MACHINAUT_INTRO_URL = `https://machinaut.ai/?${REF_PARAM}#agent-prs`
+
+/** Add `?ref=pr-comment` to a URL (before any fragment), keeping existing query. */
+export function withRef(url: string): string {
+  const hash = url.indexOf("#")
+  const base = hash === -1 ? url : url.slice(0, hash)
+  const frag = hash === -1 ? "" : url.slice(hash)
+  if (/[?&]ref=pr-comment(&|$)/.test(base)) return url
+  return `${base}${base.includes("?") ? "&" : "?"}${REF_PARAM}${frag}`
+}
+
 /** How much of the OSS report markdown we quote as a teaser. */
 const TEASER_MAX_LINES = 16
 const TEASER_MAX_CHARS = 1400
@@ -51,7 +65,7 @@ export function renderComment({ report, sessionUrl }: RenderInput): string {
   )
   parts.push("")
   parts.push(
-    `**[Open this session in Machinaut →](${sessionUrl})**  ` +
+    `**[Open this session in Machinaut →](${withRef(sessionUrl)})**  ` +
       "🔒 _Sign-in required — visible to team members already in your Machinaut org. " +
       "This is the internal console, **not** a public post-mortem link._",
   )
@@ -93,7 +107,8 @@ function renderFooter(): string {
     `<sub>The chain, report, and projection are produced by ` +
     `<a href="${LODESTAR_URL}">Lodestar</a> (open source, Apache-2.0) from the agent's ` +
     `append-only event log — Machinaut adds hosting, tenancy, and the governance surface. ` +
-    `Posted by <a href="${ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.</sub>`
+    `Posted by <a href="${ACTION_URL}">machinaut-pr-action</a>; updates in place on re-runs.<br>` +
+    `What is Machinaut? <a href="${MACHINAUT_INTRO_URL}">machinaut.ai</a></sub>`
   )
 }
 

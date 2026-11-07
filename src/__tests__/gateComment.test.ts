@@ -136,7 +136,7 @@ describe("renderGateComment", () => {
     expect(body).toContain("0 critical · 1 warning · 3 info")
     expect(body).toContain("| **Unreadable** | 0 approval request(s) · 0 sentinel alert(s) withheld by the shipper")
     expect(body).toContain("unreadable records: fail closed")
-    expect(body).toContain(`[Open the evidence in Machinaut →](${SESSION_URL})`)
+    expect(body).toContain(`[Open the evidence in Machinaut →](${SESSION_URL}?ref=pr-comment)`)
     expect(body).toContain("Sign-in required")
   })
 
@@ -207,5 +207,20 @@ describe("markdown safety helpers", () => {
   })
   it("escapeMd() neutralises link/HTML/emphasis syntax", () => {
     expect(escapeMd("<img src=x>*_[a](b)|")).toBe("\\<img src=x\\>\\*\\_\\[a\\]\\(b\\)\\|")
+  })
+})
+
+describe("funnel links (issues 15, 16)", () => {
+  it("points How to verify at the docs page, keeps the README as secondary, tags links", () => {
+    const body = render()
+    expect(body).toContain("[How to verify](https://machinaut.ai/docs/attestation-gate?ref=pr-comment)")
+    expect(body).toContain("machinaut-pr-action#gate-mode-beta")
+    expect(body).toContain(`](${SESSION_URL}?ref=pr-comment)`)
+    expect(body).toContain('What is Machinaut? <a href="https://machinaut.ai/?ref=pr-comment#agent-prs">machinaut.ai</a>')
+  })
+  it("error comment carries the tagged link and the footer", () => {
+    const body = renderGateErrorComment({ sessionUrl: SESSION_URL, message: "x", dryRun: false })
+    expect(body).toContain(`](${SESSION_URL}?ref=pr-comment)`)
+    expect(body).toContain("What is Machinaut?")
   })
 })
