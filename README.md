@@ -383,6 +383,10 @@ and keeps the console deep link below it for your team.
   code: it runs with your secrets — the classic "pwn request". Do **not** publish from a
   `workflow_run` that takes a session id from an artifact a fork produced: that id is
   attacker-controlled.
+- **One run per PR at a time.** A new session on the same PR replaces its previous link, so two
+  overlapping runs could finish in the wrong order and leave the comment pointing at the replaced
+  (revoked) link. Give the job a per-PR `concurrency` group, as the
+  [example](./examples/machinaut-evidence.yml) does.
 - **Contain the token.** Pin it to a project that only CI ships into, and consider a GitHub
   environment secret with protection rules: anyone who can run a workflow holding the secret can
   publish any eligible session of that project. Revoking the token in the console revokes its live

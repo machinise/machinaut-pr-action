@@ -20,6 +20,14 @@ permissions:
   contents: read
   pull-requests: write # required so the action can post/update the sticky comment
 
+# One run per PR at a time, so two overlapping runs cannot race on the sticky
+# comment. Needed once you set `machinaut-publish-token`: a newer run's link
+# replaces the older one, and an older run finishing last would otherwise leave
+# the comment pointing at the replaced (revoked) link. Queues, never cancels.
+concurrency:
+  group: machinaut-evidence-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   evidence:
     runs-on: ubuntu-latest
