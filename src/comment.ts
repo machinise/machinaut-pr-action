@@ -1,5 +1,6 @@
 import { type Chips, deriveChips } from "./projection"
 import type { SessionReport } from "./machinaut"
+import { formatExpiryDate, type PublishState, publishReasonText } from "./publish"
 
 /**
  * The hidden marker that makes the comment "sticky": on a re-run we find the
@@ -35,6 +36,12 @@ export interface RenderInput {
   report: SessionReport
   /** Console deep link to the session (login-walled). */
   sessionUrl: string
+  /**
+   * Public post-mortem link (planned, ADR-0002). Absent, or skipped with
+   * `configured: false`, renders exactly the comment this action posted before
+   * the feature.
+   */
+  publish?: PublishState
 }
 
 /**
@@ -49,7 +56,7 @@ export interface RenderInput {
  *    fence, produced by slicing lines — never by extracting fields from it.
  *  - Positioning: "your team governs your agent fleet: approve, audit, prove."
  */
-export function renderComment({ report, sessionUrl }: RenderInput): string {
+export function renderComment({ report, sessionUrl, publish }: RenderInput): string {
   const chips = deriveChips(report.projection)
   const parts: string[] = []
 
@@ -64,11 +71,7 @@ export function renderComment({ report, sessionUrl }: RenderInput): string {
       "step linked back to the append-only event log.",
   )
   parts.push("")
-  parts.push(
-    `**[Open this session in Machinaut →](${withRef(sessionUrl)})**  ` +
-      "🔒 _Sign-in required — visible to team members already in your Machinaut org. " +
-      "This is the internal console, **not** a public post-mortem link._",
-  )
+  parts.push(...renderLinks(sessionUrl, publish))
 
   const teaser = buildTeaser(report.report_markdown)
   if (teaser) {
@@ -90,6 +93,38 @@ export function renderComment({ report, sessionUrl }: RenderInput): string {
   parts.push(renderFooter())
 
   return parts.join("\n")
+}
+
+/**
+ * The link block. Three shapes, each labelled for what it is (candor #4):
+ *  - a public link was minted or reused → the public post-mortem first, with the
+ *    ADR-0002 decision-9 label (Beta, anyone with the link, expiry), then the
+ *    sign-in-walled console for the team;
+ *  - publishing was configured but did not produce a link → the console link as
+ *    before, plus one plain line saying why (ADR-0002 decision 20);
+ *  - no publish token (whatever the skip reason) → the console link exactly as
+ *    before the feature existed.
+ */
+function renderLinks(sessionUrl: string, publish: PublishState | undefined): string[] {
+  if (publish?.kind === "published") {
+    const expiry = formatExpiryDate(publish.expiresAt)
+    return [
+      `**[Open the public post-mortem →](${withRef(publish.url)})**  ` +
+        "🌐 _Public post-mortem link (Beta). Anyone with the link can view it. " +
+        `${expiry ? `Expires ${expiry} (UTC).` : "Machinaut did not report an expiry."}_`,
+      "",
+      `Your team can also [open this session in the Machinaut console](${withRef(sessionUrl)}) — ` +
+        "🔒 _sign-in required; visible to team members already in your Machinaut org._",
+    ]
+  }
+  const lines = [
+    `**[Open this session in Machinaut →](${withRef(sessionUrl)})**  ` +
+      "🔒 _Sign-in required — visible to team members already in your Machinaut org. " +
+      "This is the internal console, **not** a public post-mortem link._",
+  ]
+  const why = publish?.kind === "skipped" && publish.configured ? publishReasonText(publish.reason, publish.status) : undefined
+  if (why) lines.push("", `Public link not published: ${why}`)
+  return lines
 }
 
 function renderChips(chips: Chips): string {

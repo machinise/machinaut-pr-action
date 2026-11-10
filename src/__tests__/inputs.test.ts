@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { parseBooleanInput, parseMode, parseSeverity, readInputs } from "../inputs"
 
 /** `@actions/core.getInput(name)` reads `INPUT_<NAME>` (spaces → `_`, upper-cased). */
@@ -98,5 +98,31 @@ describe("readInputs", () => {
     setInput("mode", "gate")
     setInput("max-sentinel-severity", "bogus")
     expect(() => readInputs()).toThrow(/max-sentinel-severity/)
+  })
+})
+
+describe("readInputs — machinaut-publish-token (planned)", () => {
+  it("is empty and masks nothing when not supplied", () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
+    try {
+      expect(readInputs().publishToken).toBe("")
+      expect(write.mock.calls.map((c) => String(c[0])).join("")).not.toContain("::add-mask::")
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  it("is read, trimmed and masked as soon as it is read (comment and gate mode)", () => {
+    for (const mode of ["comment", "gate"]) {
+      setInput("mode", mode)
+      setInput("machinaut-publish-token", "  mp_secret_value  ")
+      const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
+      try {
+        expect(readInputs().publishToken).toBe("mp_secret_value")
+        expect(write.mock.calls.map((c) => String(c[0])).join("")).toContain("::add-mask::mp_secret_value")
+      } finally {
+        write.mockRestore()
+      }
+    }
   })
 })

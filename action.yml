@@ -2,8 +2,9 @@ name: 'Machinaut PR evidence comment'
 description: >-
   Post an agent-authored PR's evidence trail as one sticky comment: a verdict
   teaser quoted from the Lodestar trust report, plus a deep link to the session
-  in Machinaut. Read-only — it uses your existing project key and links to your
-  team's console (sign-in required), never to a public page. Optional gate mode
+  in Machinaut. Read-only with your existing project key, which links to your
+  team's console (sign-in required) and never publishes. Planned: a separate CI
+  publish token adds a public, expiring post-mortem link. Optional gate mode
   (beta): your CI evaluates the run's governance facts against your policy, signs
   the decision with its own Sigstore identity, and fails a required check.
 author: 'Machinise'
@@ -20,7 +21,22 @@ inputs:
       calls GET /v1/projects/:p/sessions/:s/governance). This is NOT a
       publish credential — a project key cannot mint a public share by design,
       which is why the comment links to your sign-in-walled team console.
+      Public links use the separate `machinaut-publish-token` (planned).
     required: true
+  machinaut-publish-token:
+    description: >-
+      PLANNED — needs a Machinaut control plane that serves
+      POST /v1/publish/shares, which the hosted console does not yet. Optional
+      CI publish token (`mp_…`, a repo secret): a separate credential an org
+      owner mints for one project, whose only power is a time-limited public
+      share of a recent, low-sensitivity session. When set, comment mode mints
+      (or reuses) a public post-mortem link for the session and leads the
+      comment with it. Never used for pull requests from forks. When empty, or
+      when publishing is refused or fails, the comment links the sign-in-walled
+      console (plus a one-line reason when this is set) and the step does not
+      fail. Masked in the log. Gate mode ignores it.
+    required: false
+    default: ''
   project-id:
     description: 'The Machinaut project id the shipped session belongs to.'
     required: true
@@ -124,6 +140,16 @@ outputs:
     description: >-
       One of `created`, `updated`, or `skipped:<reason>` — machine-readable
       outcome for downstream steps.
+  share-url:
+    description: >-
+      Comment mode (planned): the public post-mortem URL (`<console>/s/<token>`)
+      when `machinaut-publish-token` minted or reused one; empty otherwise.
+  publish:
+    description: >-
+      Comment mode (planned): `published`, `reused`, or `skipped:<reason>`
+      (e.g. `skipped:no-token`, `skipped:fork`, `skipped:ceiling-above-token`).
+      Empty when the action stopped before the publish step. Reporting only —
+      a publish problem never fails the step.
   decision:
     description: 'Gate mode: `pass` or `fail` (empty if the gate did not evaluate).'
   reasons:

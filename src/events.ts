@@ -122,6 +122,59 @@ export interface ForkPayload {
   }
 }
 
+/** The repo slices fork detection for PUBLISHING compares, on every event that carries them. */
+export interface ForkHeadPayload {
+  pull_request?: {
+    head?: { repo?: { full_name?: string } | null }
+    base?: { repo?: { full_name?: string } | null }
+  }
+  workflow_run?: {
+    head_repository?: { full_name?: string } | null
+    repository?: { full_name?: string } | null
+  }
+}
+
+/**
+ * Publishing (ADR-0002 decision 19): does this run's PR head come from a fork,
+ * judged from the payload alone?
+ *
+ * Unlike {@link isForkPullRequest} (which answers "can this run sign?"), this looks
+ * at EVERY event that carries the repos — `pull_request_target` and `workflow_run`
+ * included — because a public link must never be minted for a fork's PR, whatever
+ * credential the run happens to hold. That is what keeps the two unsupported
+ * patterns (`pull_request_target` over fork code, `workflow_run` over a fork's
+ * artifacts) from publishing even when the base repo's secrets are present.
+ *
+ * `true` = a fork (or a deleted head repo), `false` = the payload's own
+ * `pull_request` is from the same repo, `undefined` = the payload cannot rule a
+ * fork out (e.g. `issue_comment`, `push`, `workflow_run`): the caller asks the
+ * API about the PR it is publishing for, or refuses to publish.
+ *
+ * A `workflow_run` payload describes the TRIGGERING run, not necessarily the PR
+ * this action resolves: a run that followed a base-context `pull_request_target`
+ * run has `head_repository == repository` even when its PR comes from a fork. So
+ * `workflow_run` can prove a fork but never rules one out.
+ */
+export function forkHeadFromPayload(payload: ForkHeadPayload): boolean | undefined {
+  const pr = payload.pull_request
+  if (pr) {
+    if (pr.head?.repo === null) return true // the fork was deleted
+    return headDiffersFromBase(pr.head?.repo?.full_name, pr.base?.repo?.full_name)
+  }
+  const run = payload.workflow_run
+  if (run) {
+    if (run.head_repository === null) return true
+    return headDiffersFromBase(run.head_repository?.full_name, run.repository?.full_name) === true ? true : undefined
+  }
+  return undefined
+}
+
+/** `true` when the head repo is not the base repo; `undefined` when either name is missing. */
+export function headDiffersFromBase(head: string | undefined, base: string | undefined): boolean | undefined {
+  if (!head || !base) return undefined
+  return head.toLowerCase() !== base.toLowerCase()
+}
+
 /**
  * Whether this run is a `pull_request`-family event from a fork. GitHub withholds
  * repository secrets and OIDC tokens from such runs, so the gate cannot sign.

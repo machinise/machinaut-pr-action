@@ -5,6 +5,32 @@ Notable changes to this action. Format follows
 [SemVer](https://semver.org/). Consumers should pin the moving major alias
 (`@v1`), which the release workflow re-points at each `v1.x.y` release.
 
+## Unreleased
+
+### Added
+
+- **Public post-mortem link (planned; the control-plane endpoint is not deployed yet).** New
+  optional input `machinaut-publish-token`: a separate, owner-minted CI publish token (`mp_…`).
+  When set, comment mode calls `POST /v1/publish/shares` with `{ project_id, session_id, subject }`
+  (subject `github.com/<owner>/<repo>/pull/<n>`; no label, because a label is public), and leads the
+  sticky comment with the public `/s/:token` link, labelled "Public post-mortem link (Beta). Anyone
+  with the link can view it. Expires `<date>`." A reuse (200) and a new link (201) are both
+  success. The console deep link stays below it.
+- New outputs `share-url` and `publish` (`published`, `reused`, or `skipped:<reason>`).
+- Forks never publish, on any event: `pull_request` / `pull_request_target` are judged from the
+  event's own PR; `workflow_run`, `issue_comment`, `push` and the rest through the GitHub API, refusing
+  if that lookup fails.
+- No token, a fork, or any refusal or error (400/401/402/403/404/409/429/5xx, network) falls back to
+  the console deep link, plus one line saying why when the token is set. A publish problem never
+  fails the step, whatever `fail-on-error` says. With the token unset the comment is unchanged.
+- The token is masked as soon as it is read; a value without the `mp_` prefix (for example a
+  project key) is refused locally and never sent. Gate mode ignores the input.
+
+### Changed
+
+- Internal: comment mode moved from `main.ts` to `commentRun.ts` with injected dependencies, so it
+  is unit-tested like gate mode. Its existing behaviour is unchanged.
+
 ## 2.0.2 — 2026-11-07
 
 ### Changed

@@ -165,3 +165,51 @@ describe("funnel links (issue 15)", () => {
     expect(withRef(withRef("https://x.test/a"))).toBe("https://x.test/a?ref=pr-comment")
   })
 })
+
+describe("renderComment — public post-mortem link (planned, ADR-0002)", () => {
+  const SHARE_URL = "https://console.machinaut.ai/s/sh_AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+  const plain = renderComment({ report, sessionUrl: SESSION_URL })
+
+  it("no publish state, or a skip without a configured token, renders the comment unchanged", () => {
+    expect(renderComment({ report, sessionUrl: SESSION_URL, publish: undefined })).toBe(plain)
+    expect(
+      renderComment({ report, sessionUrl: SESSION_URL, publish: { kind: "skipped", reason: "no-token", configured: false } }),
+    ).toBe(plain)
+    expect(
+      renderComment({ report, sessionUrl: SESSION_URL, publish: { kind: "skipped", reason: "fork", configured: false } }),
+    ).toBe(plain)
+  })
+
+  it("published: leads with the public link, labelled Beta, public, expiring; keeps the console link", () => {
+    const body = renderComment({
+      report,
+      sessionUrl: SESSION_URL,
+      publish: { kind: "published", reused: false, url: SHARE_URL, expiresAt: "2026-12-10T10:47:00Z" },
+    })
+    const publicAt = body.indexOf(`[Open the public post-mortem →](${SHARE_URL}?ref=pr-comment)`)
+    const consoleAt = body.indexOf(`(${SESSION_URL}?ref=pr-comment)`)
+    expect(publicAt).toBeGreaterThan(-1)
+    expect(consoleAt).toBeGreaterThan(publicAt)
+    expect(body).toContain("Public post-mortem link (Beta). Anyone with the link can view it. Expires 2026-12-10 (UTC).")
+    expect(body).toContain("sign-in required")
+    expect(body).not.toContain("not** a public post-mortem")
+    expect(body.startsWith(STICKY_MARKER)).toBe(true)
+  })
+
+  it("published without an expiry says so rather than inventing one", () => {
+    const body = renderComment({ report, sessionUrl: SESSION_URL, publish: { kind: "published", reused: true, url: SHARE_URL } })
+    expect(body).toContain("Machinaut did not report an expiry.")
+  })
+
+  it("configured but not published: the console link as before plus one reason line", () => {
+    const body = renderComment({
+      report,
+      sessionUrl: SESSION_URL,
+      publish: { kind: "skipped", reason: "ceiling-above-token", configured: true, status: 409 },
+    })
+    expect(body).toContain("not** a public post-mortem link")
+    const reasonLines = body.split("\n").filter((l) => l.startsWith("Public link not published: "))
+    expect(reasonLines).toHaveLength(1)
+    expect(reasonLines[0]).toContain("`--sensitivity-ceiling public`")
+  })
+})

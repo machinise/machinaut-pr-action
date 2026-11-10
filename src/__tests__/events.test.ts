@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { findPrNumberForSha, headShaFromPayload, type PrLister, prTargetFromPayload } from "../events"
+import {
+  findPrNumberForSha,
+  forkHeadFromPayload,
+  headDiffersFromBase,
+  headShaFromPayload,
+  type PrLister,
+  prTargetFromPayload,
+} from "../events"
 
 const CONTEXT_SHA = "default-branch-sha"
 
@@ -102,5 +109,41 @@ describe("headShaFromPayload (gate mode's gitCommit subject)", () => {
     expect(headShaFromPayload({}, "tip", "push")).toBe("tip")
     expect(headShaFromPayload({}, CONTEXT_SHA, "issue_comment")).toBeUndefined()
     expect(headShaFromPayload({}, CONTEXT_SHA, "workflow_dispatch")).toBeUndefined()
+  })
+})
+
+describe("forkHeadFromPayload (publishing: never for a fork's PR)", () => {
+  const base = { repo: { full_name: "acme/widgets" } }
+
+  it("same-repo pull_request → false", () => {
+    expect(forkHeadFromPayload({ pull_request: { head: { repo: { full_name: "Acme/Widgets" } }, base } })).toBe(false)
+  })
+
+  it("fork pull_request (and pull_request_target, whose payload is the same) → true", () => {
+    expect(forkHeadFromPayload({ pull_request: { head: { repo: { full_name: "mallory/widgets" } }, base } })).toBe(true)
+  })
+
+  it("a deleted fork (head.repo null) → true", () => {
+    expect(forkHeadFromPayload({ pull_request: { head: { repo: null }, base } })).toBe(true)
+  })
+
+  it("workflow_run can prove a fork but never rules one out (it describes the triggering run)", () => {
+    const repository = { full_name: "acme/widgets" }
+    expect(forkHeadFromPayload({ workflow_run: { head_repository: { full_name: "mallory/widgets" }, repository } })).toBe(true)
+    expect(forkHeadFromPayload({ workflow_run: { head_repository: null, repository } })).toBe(true)
+    // e.g. a run that followed a base-context pull_request_target run for a fork's PR
+    expect(forkHeadFromPayload({ workflow_run: { head_repository: { full_name: "acme/widgets" }, repository } })).toBeUndefined()
+  })
+
+  it("cannot say for payloads without repos (issue_comment, push, or a stripped PR payload)", () => {
+    expect(forkHeadFromPayload({})).toBeUndefined()
+    expect(forkHeadFromPayload({ pull_request: { head: {}, base: {} } })).toBeUndefined()
+    expect(forkHeadFromPayload({ workflow_run: {} })).toBeUndefined()
+  })
+
+  it("headDiffersFromBase is case-insensitive and undefined when a name is missing", () => {
+    expect(headDiffersFromBase("A/B", "a/b")).toBe(false)
+    expect(headDiffersFromBase("x/b", "a/b")).toBe(true)
+    expect(headDiffersFromBase(undefined, "a/b")).toBeUndefined()
   })
 })
