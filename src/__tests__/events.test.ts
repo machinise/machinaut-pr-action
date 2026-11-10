@@ -127,11 +127,12 @@ describe("forkHeadFromPayload (publishing: never for a fork's PR)", () => {
     expect(forkHeadFromPayload({ pull_request: { head: { repo: null }, base } })).toBe(true)
   })
 
-  it("workflow_run compares head_repository with repository", () => {
+  it("workflow_run can prove a fork but never rules one out (it describes the triggering run)", () => {
     const repository = { full_name: "acme/widgets" }
     expect(forkHeadFromPayload({ workflow_run: { head_repository: { full_name: "mallory/widgets" }, repository } })).toBe(true)
-    expect(forkHeadFromPayload({ workflow_run: { head_repository: { full_name: "acme/widgets" }, repository } })).toBe(false)
     expect(forkHeadFromPayload({ workflow_run: { head_repository: null, repository } })).toBe(true)
+    // e.g. a run that followed a base-context pull_request_target run for a fork's PR
+    expect(forkHeadFromPayload({ workflow_run: { head_repository: { full_name: "acme/widgets" }, repository } })).toBeUndefined()
   })
 
   it("cannot say for payloads without repos (issue_comment, push, or a stripped PR payload)", () => {

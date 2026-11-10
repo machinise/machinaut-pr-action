@@ -145,9 +145,15 @@ export interface ForkHeadPayload {
  * patterns (`pull_request_target` over fork code, `workflow_run` over a fork's
  * artifacts) from publishing even when the base repo's secrets are present.
  *
- * `true` = a fork (or a deleted head repo), `false` = the same repo, `undefined` =
- * the payload cannot say (e.g. `issue_comment`, `push`): the caller asks the API
- * or refuses to publish.
+ * `true` = a fork (or a deleted head repo), `false` = the payload's own
+ * `pull_request` is from the same repo, `undefined` = the payload cannot rule a
+ * fork out (e.g. `issue_comment`, `push`, `workflow_run`): the caller asks the
+ * API about the PR it is publishing for, or refuses to publish.
+ *
+ * A `workflow_run` payload describes the TRIGGERING run, not necessarily the PR
+ * this action resolves: a run that followed a base-context `pull_request_target`
+ * run has `head_repository == repository` even when its PR comes from a fork. So
+ * `workflow_run` can prove a fork but never rules one out.
  */
 export function forkHeadFromPayload(payload: ForkHeadPayload): boolean | undefined {
   const pr = payload.pull_request
@@ -158,7 +164,7 @@ export function forkHeadFromPayload(payload: ForkHeadPayload): boolean | undefin
   const run = payload.workflow_run
   if (run) {
     if (run.head_repository === null) return true
-    return headDiffersFromBase(run.head_repository?.full_name, run.repository?.full_name)
+    return headDiffersFromBase(run.head_repository?.full_name, run.repository?.full_name) === true ? true : undefined
   }
   return undefined
 }

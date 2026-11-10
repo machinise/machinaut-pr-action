@@ -150,7 +150,15 @@ export async function runComment(inputs: Inputs, deps: CommentDeps): Promise<voi
     core.setOutput("status", result.action)
     core.info(`${result.action} evidence comment on ${owner}/${repo}#${issueNumber}: ${result.html_url}`)
   } catch (err) {
-    return fail("comment-failed", errMessage(err))
+    // Say so when a public link exists that this comment failed to show: it is
+    // live (and may have replaced this PR's previous link) until it expires or an
+    // owner revokes it.
+    const live =
+      publish.kind === "published"
+        ? ` — note: the public post-mortem link ${publish.url} was ${publish.reused ? "reused" : "published"} and is live, ` +
+          "but this comment could not show it"
+        : ""
+    return fail("comment-failed", `${errMessage(err)}${live}`)
   }
 }
 
@@ -159,7 +167,8 @@ export async function runComment(inputs: Inputs, deps: CommentDeps): Promise<voi
  *  1. the payload says the PR is from a fork → never publish (whatever token the run holds);
  *  2. no publish token → nothing to do; the comment stays exactly as without the feature;
  *  3. a token that is not a CI publish token (`mp_…`) → refuse locally, send nothing;
- *  4. the payload cannot say whether it is a fork → ask the API; unsure → do not publish;
+ *  4. unless the payload's own pull_request is this PR and is from the same repo,
+ *     ask the API about this PR; unsure → do not publish;
  *  5. `POST /v1/publish/shares` → a public link, or a reason.
  * Every outcome is logged; refusals and errors as a warning annotation. None fails the step.
  */
@@ -206,8 +215,11 @@ async function planAndPublish(
     return refuse(skipped("invalid-token"), publishReasonText("invalid-token")!)
   }
 
-  if (forkFromPayload === undefined) {
-    // e.g. issue_comment or push: the payload names no head repo. Ask GitHub.
+  // The payload's "same repo" is conclusive only when its own pull_request IS the
+  // PR being published; anything else (issue_comment, push, workflow_run, …) is
+  // checked against the resolved PR itself.
+  const payloadPr = (context.payload as PrPayload).pull_request?.number
+  if (forkFromPayload !== false || payloadPr !== prNumber) {
     let fork: boolean | undefined
     try {
       const { data } = await octokit.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber })

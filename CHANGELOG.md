@@ -17,8 +17,9 @@ Notable changes to this action. Format follows
   with the link can view it. Expires `<date>`." A reuse (200) and a new link (201) are both
   success. The console deep link stays below it.
 - New outputs `share-url` and `publish` (`published`, `reused`, or `skipped:<reason>`).
-- Forks never publish, on any event (`pull_request`, `pull_request_target`, `workflow_run`,
-  `issue_comment` — the last checked through the GitHub API, refusing if that check fails).
+- Forks never publish, on any event: `pull_request` / `pull_request_target` are judged from the
+  event's own PR; `workflow_run`, `issue_comment`, `push` and the rest through the GitHub API, refusing
+  if that lookup fails.
 - No token, a fork, or any refusal or error (400/401/402/403/404/409/429/5xx, network) falls back to
   the console deep link, plus one line saying why when the token is set. A publish problem never
   fails the step, whatever `fail-on-error` says. With the token unset the comment is unchanged.

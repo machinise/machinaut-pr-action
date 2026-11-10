@@ -375,8 +375,9 @@ and keeps the console deep link below it for your team.
 ### Forks and triggers
 
 - **Forks never publish.** The action refuses to publish for any PR whose head repository is not
-  the base repository, on every event: `pull_request`, `pull_request_target`, `workflow_run`, and
-  `issue_comment` (checked through the GitHub API; if that check fails, nothing is published). On a
+  the base repository, on every event. For `pull_request` and `pull_request_target` it reads the
+  PR's repositories from the event; for every other event (`workflow_run`, `issue_comment`, `push`, …)
+  it looks the PR up through the GitHub API, and if that lookup fails nothing is published. On a
   `pull_request` from a fork, GitHub passes no secrets anyway.
 - **Run it on `pull_request`.** Do **not** use `pull_request_target` with a checkout of the fork's
   code: it runs with your secrets — the classic "pwn request". Do **not** publish from a

@@ -232,6 +232,41 @@ describe("runComment — publishing", () => {
     expect(h.outputs.publish).toBe("published")
   })
 
+  it("workflow_run whose triggering run was same-repo: still checks the PR itself (fork → skipped)", async () => {
+    const context = prContext(SAME_REPO, {
+      eventName: "workflow_run",
+      payload: {
+        workflow_run: {
+          head_sha: "b".repeat(40),
+          pull_requests: [{ number: 7 }],
+          head_repository: SAME_REPO, // e.g. it followed a base-context pull_request_target run
+          repository: SAME_REPO,
+        },
+      },
+    })
+    const fork = harness({ context, pull: { head: { repo: FORK_REPO }, base: { repo: SAME_REPO } }, publish: () => json(201, shareBody()) })
+    await runComment(inputs({ publishToken: PUBLISH_TOKEN }), fork.deps)
+    expect(fork.pullsGet).toHaveBeenCalledWith({ owner: "acme", repo: "widgets", pull_number: 7 })
+    expect(fork.publishCalls()).toHaveLength(0)
+    expect(fork.outputs.publish).toBe("skipped:fork")
+
+    const same = harness({ context, publish: () => json(201, shareBody()) })
+    await runComment(inputs({ publishToken: PUBLISH_TOKEN }), same.deps)
+    expect(same.pullsGet).toHaveBeenCalledTimes(1)
+    expect(same.outputs.publish).toBe("published")
+  })
+
+  it("with no pull_request in the payload, the resolved PR itself is always checked", async () => {
+    const context = prContext(SAME_REPO, {
+      eventName: "workflow_dispatch",
+      payload: { workflow_run: { pull_requests: [{ number: 7 }] } },
+    })
+    const h = harness({ context, publish: () => json(201, shareBody()) })
+    await runComment(inputs({ publishToken: PUBLISH_TOKEN }), h.deps)
+    expect(h.pullsGet).toHaveBeenCalledTimes(1)
+    expect(h.outputs.publish).toBe("published")
+  })
+
   it("does not call pulls.get when the payload already rules out a fork", async () => {
     const h = harness({ publish: () => json(201, shareBody()) })
     await runComment(inputs({ publishToken: PUBLISH_TOKEN }), h.deps)
@@ -368,6 +403,14 @@ describe("runComment — refusals and errors degrade, never fail the step", () =
     expect(h.everythingLogged()).not.toContain(PUBLISH_TOKEN)
     expect(h.body()).not.toContain(PUBLISH_TOKEN)
     expect(h.core.warning.mock.calls[0]![0]).toContain("token *** was revoked")
+  })
+
+  it("a comment failure after publishing still says the public link is live, and does not fail on publish", async () => {
+    const h = harness({ publish: () => json(201, shareBody()) })
+    h.createComment.mockRejectedValueOnce(Object.assign(new Error("Resource not accessible by integration"), { status: 403 }))
+    await runComment(inputs({ publishToken: PUBLISH_TOKEN }), h.deps)
+    expect(h.outputs).toMatchObject({ status: "skipped:comment-failed", publish: "published", "share-url": SHARE_URL })
+    expect(h.core.warning).toHaveBeenCalledWith(expect.stringContaining(`public post-mortem link ${SHARE_URL} was published and is live`))
   })
 
   it("never prints the publish token on success either", async () => {

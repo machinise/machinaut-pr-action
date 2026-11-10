@@ -79254,9 +79254,15 @@ function headShaFromPayload(payload, contextSha, eventName) {
  * patterns (`pull_request_target` over fork code, `workflow_run` over a fork's
  * artifacts) from publishing even when the base repo's secrets are present.
  *
- * `true` = a fork (or a deleted head repo), `false` = the same repo, `undefined` =
- * the payload cannot say (e.g. `issue_comment`, `push`): the caller asks the API
- * or refuses to publish.
+ * `true` = a fork (or a deleted head repo), `false` = the payload's own
+ * `pull_request` is from the same repo, `undefined` = the payload cannot rule a
+ * fork out (e.g. `issue_comment`, `push`, `workflow_run`): the caller asks the
+ * API about the PR it is publishing for, or refuses to publish.
+ *
+ * A `workflow_run` payload describes the TRIGGERING run, not necessarily the PR
+ * this action resolves: a run that followed a base-context `pull_request_target`
+ * run has `head_repository == repository` even when its PR comes from a fork. So
+ * `workflow_run` can prove a fork but never rules one out.
  */
 function forkHeadFromPayload(payload) {
     const pr = payload.pull_request;
@@ -79269,7 +79275,7 @@ function forkHeadFromPayload(payload) {
     if (run) {
         if (run.head_repository === null)
             return true;
-        return headDiffersFromBase(run.head_repository?.full_name, run.repository?.full_name);
+        return headDiffersFromBase(run.head_repository?.full_name, run.repository?.full_name) === true ? true : undefined;
     }
     return undefined;
 }
@@ -79450,7 +79456,14 @@ async function runComment(inputs, deps) {
         core.info(`${result.action} evidence comment on ${owner}/${repo}#${issueNumber}: ${result.html_url}`);
     }
     catch (err) {
-        return fail("comment-failed", commentRun_errMessage(err));
+        // Say so when a public link exists that this comment failed to show: it is
+        // live (and may have replaced this PR's previous link) until it expires or an
+        // owner revokes it.
+        const live = publish.kind === "published"
+            ? ` — note: the public post-mortem link ${publish.url} was ${publish.reused ? "reused" : "published"} and is live, ` +
+                "but this comment could not show it"
+            : "";
+        return fail("comment-failed", `${commentRun_errMessage(err)}${live}`);
     }
 }
 /**
@@ -79458,7 +79471,8 @@ async function runComment(inputs, deps) {
  *  1. the payload says the PR is from a fork → never publish (whatever token the run holds);
  *  2. no publish token → nothing to do; the comment stays exactly as without the feature;
  *  3. a token that is not a CI publish token (`mp_…`) → refuse locally, send nothing;
- *  4. the payload cannot say whether it is a fork → ask the API; unsure → do not publish;
+ *  4. unless the payload's own pull_request is this PR and is from the same repo,
+ *     ask the API about this PR; unsure → do not publish;
  *  5. `POST /v1/publish/shares` → a public link, or a reason.
  * Every outcome is logged; refusals and errors as a warning annotation. None fails the step.
  */
@@ -79491,8 +79505,11 @@ async function planAndPublish(inputs, deps, octokit, prNumber) {
     if (!token.startsWith(PUBLISH_TOKEN_PREFIX)) {
         return refuse(skipped("invalid-token"), publishReasonText("invalid-token"));
     }
-    if (forkFromPayload === undefined) {
-        // e.g. issue_comment or push: the payload names no head repo. Ask GitHub.
+    // The payload's "same repo" is conclusive only when its own pull_request IS the
+    // PR being published; anything else (issue_comment, push, workflow_run, …) is
+    // checked against the resolved PR itself.
+    const payloadPr = context.payload.pull_request?.number;
+    if (forkFromPayload !== false || payloadPr !== prNumber) {
         let fork;
         try {
             const { data } = await octokit.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber });
