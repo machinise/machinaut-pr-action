@@ -35,6 +35,12 @@ export interface Inputs {
   dryRun: boolean
   /** Gate-mode only: POST the signed bundle to Machinaut's attestation intake. Default true. */
   postAttestation: boolean
+  /**
+   * Comment mode, planned (ADR-0002): the optional CI publish token (`mp_…`) that
+   * mints the public post-mortem link. '' when not supplied. Masked in the log as
+   * soon as it is read.
+   */
+  publishToken: string
 }
 
 /** YAML 1.2 core-schema booleans — the exact set `core.getBooleanInput` accepts. */
@@ -73,6 +79,11 @@ export function parseSeverity(raw: string): SentinelSeverity {
 
 /** Read and normalise the action inputs. `console-url` falls back to `api-url`. */
 export function readInputs(): Inputs {
+  // Mask the publish token first, before anything (even an input error) can
+  // print it. GitHub masks `secrets.*` values already; this also covers a token
+  // passed another way.
+  const publishToken = core.getInput("machinaut-publish-token").trim()
+  if (publishToken) core.setSecret(publishToken)
   const apiUrl = core.getInput("api-url").trim() || "https://console.machinaut.ai"
   const consoleUrl = core.getInput("console-url").trim() || apiUrl
   const mode = parseMode(core.getInput("mode"))
@@ -101,5 +112,6 @@ export function readInputs(): Inputs {
     },
     dryRun: gate ? parseBooleanInput("dry-run", core.getInput("dry-run"), false) : false,
     postAttestation: gate ? parseBooleanInput("post-attestation", core.getInput("post-attestation"), true) : true,
+    publishToken,
   }
 }

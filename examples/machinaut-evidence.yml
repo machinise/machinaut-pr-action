@@ -10,6 +10,9 @@
 # Increment 1 only ever links to the login-walled console.
 
 name: Machinaut evidence
+# Keep this on `pull_request`. Do not switch to `pull_request_target` with a
+# checkout of the fork's code (it runs with your secrets), and do not publish
+# from a `workflow_run` that reads a session id from a fork's artifact.
 on:
   pull_request:
 
@@ -42,3 +45,11 @@ jobs:
           project-id: your-project-id
           session-id: ${{ steps.ship.outputs.session-id }}
           # api-url: https://console.machinaut.ai   # self-hosted? point at your control plane
+
+          # PLANNED (not yet on the hosted console; needs a v2 release that
+          # includes it): a public, expiring post-mortem link. This is a
+          # separate, owner-minted CI publish token, not your project key, which
+          # cannot mint a public share. Ship with `--sensitivity-ceiling public`
+          # for a default token to accept the session. Fork PRs never publish,
+          # and a publish problem never fails this step.
+          # machinaut-publish-token: ${{ secrets.MACHINAUT_PUBLISH_TOKEN }}

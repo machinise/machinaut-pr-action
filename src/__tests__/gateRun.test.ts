@@ -23,6 +23,7 @@ function inputs(overrides: Partial<Inputs> = {}): Inputs {
     policy: { requireHoldsResolved: true, requireBoundApprovals: false, maxSentinelSeverity: "warning", allowUnreadable: false },
     dryRun: false,
     postAttestation: true,
+    publishToken: "",
     ...overrides,
   }
 }

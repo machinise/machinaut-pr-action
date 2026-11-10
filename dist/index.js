@@ -78499,7 +78499,6 @@ var __webpack_exports__ = {};
 
 // EXPORTS
 __nccwpck_require__.d(__webpack_exports__, {
-  _: () => (/* binding */ buildSessionUrl),
   e: () => (/* binding */ run)
 });
 
@@ -78604,7 +78603,384 @@ function deriveChips(p) {
     };
 }
 
+;// CONCATENATED MODULE: ./src/machinaut.ts
+/** A non-2xx response from the API, carrying the status so the caller can decide
+ *  whether it's fatal (401/403 — misconfigured credential) or skippable (404 —
+ *  no such session for this project/tenant). */
+class MachinautApiError extends Error {
+    status;
+    code;
+    constructor(status, code, message) {
+        super(message);
+        this.status = status;
+        this.code = code;
+        this.name = "MachinautApiError";
+    }
+}
+/** Strip trailing slashes so `${base}/v1/...` never doubles up. */
+function normalizeBaseUrl(raw) {
+    const trimmed = raw.trim().replace(/\/+$/, "");
+    const u = new URL(trimmed); // throws on a non-absolute / invalid URL — surfaced by the caller
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+        throw new Error(`api-url must be an http(s) URL, got '${raw}'`);
+    }
+    return trimmed;
+}
+/**
+ * Fetch a session's projection + report markdown with the project key.
+ *
+ * Uses `Authorization: Bearer <key>` (the machine-credential path in
+ * `authenticate()`), `report=1` to opt into the display markdown, and a bounded
+ * timeout so a hung control plane can't wedge the job. Path segments are
+ * percent-encoded.
+ */
+async function fetchSessionReport(opts, deps = {}) {
+    const path = `/v1/projects/${encodeURIComponent(opts.projectId)}/sessions/${encodeURIComponent(opts.sessionId)}?report=1`;
+    const { status, body } = await getJson({ apiUrl: opts.apiUrl, apiKey: opts.apiKey, path }, deps);
+    if (!body || typeof body !== "object" || !body.projection) {
+        throw new MachinautApiError(status, "unexpected_body", "Machinaut response had no projection");
+    }
+    return body;
+}
+/**
+ * GET a read-only Machinaut route with the project key and parse the JSON body.
+ * Shared by comment mode (`…/sessions/:s?report=1`) and gate mode
+ * (`…/sessions/:s/governance`). Non-2xx → {@link MachinautApiError} carrying the
+ * API's structured `{ error, message }` when present; network failure / timeout →
+ * a status-0 error.
+ */
+async function getJson(opts, deps = {}) {
+    const doFetch = deps.fetch ?? fetch;
+    const timeoutMs = deps.timeoutMs ?? 15_000;
+    const base = normalizeBaseUrl(opts.apiUrl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+        res = await doFetch(`${base}${opts.path}`, {
+            method: "GET",
+            headers: {
+                authorization: `Bearer ${opts.apiKey}`,
+                accept: "application/json",
+                "user-agent": "machinaut-pr-action",
+            },
+            signal: controller.signal,
+        });
+    }
+    catch (err) {
+        const reason = err instanceof Error && err.name === "AbortError" ? `timed out after ${timeoutMs}ms` : String(err);
+        throw new MachinautApiError(0, "network_error", `request to Machinaut failed: ${reason}`);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+    if (!res.ok) {
+        // Try to surface the API's structured `{ error, message }` without depending on it.
+        let detail = "";
+        let code = `http_${res.status}`;
+        try {
+            const body = (await res.json());
+            if (body?.error)
+                code = body.error;
+            if (body?.message)
+                detail = ` — ${body.message}`;
+        }
+        catch {
+            /* non-JSON error body; the status alone is enough */
+        }
+        throw new MachinautApiError(res.status, code, `Machinaut returned ${res.status} (${code})${detail}`);
+    }
+    const body = (await res.json());
+    return { status: res.status, body };
+}
+
+;// CONCATENATED MODULE: ./src/publish.ts
+
+/**
+ * Public post-mortem link (Track C Increment 2, ADR-0002 in the control-plane
+ * repo — PLANNED until the hosted console serves it).
+ *
+ * With the separate, owner-minted CI publish token (`mp_…`), comment mode asks
+ * Machinaut to mint — or hand back — a public, expiring `/s/:token` share of the
+ * session it just read:
+ *
+ *   POST {api-url}/v1/publish/shares
+ *   Authorization: Bearer mp_…
+ *   { "project_id", "session_id", "subject"? }      ← never a `label`: a label is public
+ *
+ *   201 { share: { token, expires_at, … }, reused: false }   a new link
+ *   200 { share: { … }, reused: true }                       this token's live link for the session
+ *
+ * The server owns every rule (ceiling gate, freshness, expiry, one live link per
+ * subject, quota, rate limit). This client only reports what happened: a refusal
+ * or an error is never thrown and never fails the step — the comment falls back
+ * to the sign-in-walled console link plus a one-line reason (ADR-0002 decision 20).
+ *
+ * The project key is never sent here: a project key cannot mint a public share,
+ * by design. The publish token is never logged; any server text that echoes it is
+ * redacted before it reaches a log line.
+ */
+const PUBLISH_TOKEN_PREFIX = "mp_";
+const PUBLISH_PATH = "/v1/publish/shares";
+const PUBLISH_TIMEOUT_MS = 15_000;
+/** ADR-0002 decision 5: `subject` is opaque and at most 200 characters. */
+const SUBJECT_MAX = 200;
+/** A share token as the control plane mints it: `sh_` + base64url(24 bytes). */
+const SHARE_TOKEN = /^sh_[A-Za-z0-9_-]{16,128}$/;
+/** Mint (or reuse) the public share. Never throws. */
+async function publishShare(req, deps = {}) {
+    try {
+        return await publish_submit(req, deps);
+    }
+    catch (err) {
+        // Belt and braces: a publish problem must never reach the comment run as a throw.
+        return {
+            ok: false,
+            status: 0,
+            reason: "network-error",
+            message: redact(`publish request failed: ${errMessage(err)}`, req.publishToken),
+        };
+    }
+}
+async function publish_submit(req, deps) {
+    const url = `${normalizeBaseUrl(req.apiUrl)}${PUBLISH_PATH}`;
+    const payload = { project_id: req.projectId, session_id: req.sessionId };
+    if (req.subject)
+        payload.subject = req.subject;
+    const body = JSON.stringify(payload);
+    const doFetch = deps.fetch ?? fetch;
+    const timeoutMs = deps.timeoutMs ?? PUBLISH_TIMEOUT_MS;
+    const post = async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const res = await doFetch(url, {
+                method: "POST",
+                headers: {
+                    authorization: `Bearer ${req.publishToken}`,
+                    "content-type": "application/json",
+                    accept: "application/json",
+                    "user-agent": "machinaut-pr-action",
+                },
+                body,
+                signal: controller.signal,
+            });
+            let parsed;
+            try {
+                parsed = await res.json();
+            }
+            catch {
+                /* non-JSON body; the status alone is enough */
+            }
+            return { status: res.status, body: parsed };
+        }
+        catch (err) {
+            const reason = err instanceof Error && err.name === "AbortError" ? `timed out after ${timeoutMs}ms` : errMessage(err);
+            return { status: 0, networkError: reason };
+        }
+        finally {
+            clearTimeout(timer);
+        }
+    };
+    // One retry, on a network error only. Safe: the server reuses this token's live
+    // share for the session (200), so a request that did land is not minted twice.
+    let raw = await post();
+    if (raw.networkError !== undefined)
+        raw = await post();
+    return classify(raw, req);
+}
+const GATE_REASONS = {
+    ceiling_above_token: "ceiling-above-token",
+    ceiling_unknown: "ceiling-unknown",
+    session_too_old: "session-too-old",
+};
+function classify(raw, req) {
+    const { status } = raw;
+    if (raw.networkError !== undefined) {
+        return {
+            ok: false,
+            status: 0,
+            reason: "network-error",
+            message: redact(`Machinaut publish endpoint unreachable: ${raw.networkError}`, req.publishToken),
+        };
+    }
+    if (status === 200 || status === 201) {
+        const share = parseShare(raw.body, req);
+        if (!share) {
+            return { ok: false, status, reason: "bad-response", message: `Machinaut publish response (HTTP ${status}) carried no usable share` };
+        }
+        const reused = status === 200 || field(raw.body, "reused") === true;
+        return { ok: true, status, reused, share };
+    }
+    const code = safeCode(field(raw.body, "error"));
+    const serverMessage = oneLine(field(raw.body, "message"), req.publishToken);
+    const detail = `HTTP ${status}${code ? `, ${code}` : ""}${serverMessage ? ` — ${serverMessage}` : ""}`;
+    const fail = (reason) => ({
+        ok: false,
+        status,
+        reason,
+        code,
+        message: `Machinaut did not publish the session (${detail})`,
+    });
+    // A gate refusal is recognised by its `reason`, whatever status carries it
+    // (the contract says 409 `not_publishable`; a 403 carrying the same reason is
+    // read the same way).
+    const gateReason = safeCode(field(raw.body, "reason"));
+    if (gateReason && GATE_REASONS[gateReason])
+        return fail(GATE_REASONS[gateReason]);
+    switch (status) {
+        case 400:
+            return fail("bad-request");
+        case 401:
+            return fail("unauthorized");
+        case 402:
+            return fail("quota-exceeded");
+        case 403:
+            return fail("project-scope-conflict");
+        case 404:
+            return fail("not-found");
+        case 409:
+            return fail("not-publishable");
+        case 429:
+            return fail("rate-limited");
+        default:
+            return fail("api-error");
+    }
+}
+/**
+ * The share out of a 200/201 body, or undefined when it is not one this action
+ * can link honestly: the token must look like a share token (it is spliced into
+ * a URL and a comment), and a share for a different project or session than the
+ * one requested is refused rather than linked from this PR.
+ */
+function parseShare(body, req) {
+    const share = field(body, "share");
+    if (!share || typeof share !== "object")
+        return undefined;
+    const token = field(share, "token");
+    if (typeof token !== "string" || !SHARE_TOKEN.test(token))
+        return undefined;
+    const projectId = field(share, "project_id");
+    const sessionId = field(share, "session_id");
+    if (projectId !== undefined && projectId !== req.projectId)
+        return undefined;
+    if (sessionId !== undefined && sessionId !== req.sessionId)
+        return undefined;
+    const out = { token };
+    const expiresAt = field(share, "expires_at");
+    if (typeof expiresAt === "string" && !Number.isNaN(Date.parse(expiresAt)))
+        out.expiresAt = expiresAt;
+    const ceiling = safeCode(field(share, "ceiling"));
+    if (ceiling)
+        out.ceiling = ceiling;
+    const replaced = safeCode(field(body, "replaced_share_id"));
+    if (replaced)
+        out.replacedShareId = replaced;
+    return out;
+}
+/** The `publish` output: `published`, `reused` or `skipped:<reason>`. */
+function publishOutput(state) {
+    if (state.kind === "published")
+        return state.reused ? "reused" : "published";
+    return `skipped:${state.reason}`;
+}
+/** `2026-12-10` from an ISO timestamp (UTC), or undefined when absent/invalid. */
+function formatExpiryDate(iso) {
+    if (!iso)
+        return undefined;
+    const ms = Date.parse(iso);
+    return Number.isNaN(ms) ? undefined : new Date(ms).toISOString().slice(0, 10);
+}
+/** `${console}/s/<token>` — the public post-mortem page the console serves. */
+function buildShareUrl(consoleUrl, token) {
+    return `${normalizeBaseUrl(consoleUrl)}/s/${encodeURIComponent(token)}`;
+}
+/**
+ * The `subject` that keeps one live link per PR: `<host>/<owner>/<repo>/pull/<n>`
+ * (`github.com/…` on github.com; the GHES host otherwise). Undefined if it would
+ * exceed the contract's 200 characters — the server then reuses per session only.
+ */
+function prSubject(serverUrl, owner, repo, prNumber) {
+    let host = "github.com";
+    try {
+        if (serverUrl)
+            host = new URL(serverUrl).host || host;
+    }
+    catch {
+        /* keep github.com */
+    }
+    const subject = `${host}/${owner}/${repo}/pull/${prNumber}`;
+    return subject.length <= SUBJECT_MAX ? subject : undefined;
+}
+/**
+ * The one-line reason the comment shows when no public link was produced, or
+ * undefined for `no-token` (no publish token configured: the comment stays
+ * exactly as it is without this feature). Fixed copy only — never server text —
+ * so nothing from the response is rendered into the PR.
+ */
+function publishReasonText(reason, status) {
+    switch (reason) {
+        case "no-token":
+            return undefined;
+        case "fork":
+            return "this pull request comes from a fork, and the action never publishes for fork pull requests.";
+        case "fork-check-failed":
+            return "the action could not confirm that this pull request is not from a fork, so it did not publish.";
+        case "invalid-token":
+            return "`machinaut-publish-token` is not a Machinaut CI publish token (those start with `mp_`; a project key cannot publish).";
+        case "bad-request":
+            return "Machinaut rejected the publish request as malformed.";
+        case "unauthorized":
+            return "Machinaut did not accept the publish token (unknown or revoked).";
+        case "quota-exceeded":
+            return "the share-link quota for this Machinaut org is used up.";
+        case "project-scope-conflict":
+            return "the publish token is pinned to a different Machinaut project than `project-id`.";
+        case "not-found":
+            return "Machinaut answered 404: the session is not in the publish token's project, or this console does not serve CI publishing yet.";
+        case "ceiling-above-token":
+            return "this session was shipped above the publish token's sensitivity ceiling — ship with `--sensitivity-ceiling public`, or have an owner mint an `internal`-ceiling publish token.";
+        case "ceiling-unknown":
+            return "Machinaut has no recorded sensitivity ceiling for this session (for example, it was shipped before ceilings were recorded), so CI cannot publish it.";
+        case "session-too-old":
+            return "this session was first shipped longer ago than the publish token's freshness window allows.";
+        case "not-publishable":
+            return "Machinaut's publish gate refused this session.";
+        case "rate-limited":
+            return "Machinaut's publish rate limit was reached; a later run can publish.";
+        case "api-error":
+            return `Machinaut's publish endpoint returned an error${status ? ` (HTTP ${status})` : ""}.`;
+        case "network-error":
+            return "Machinaut's publish endpoint could not be reached.";
+        case "bad-response":
+            return "Machinaut's publish response could not be read.";
+    }
+}
+/** Replace every occurrence of the publish token with `***`. */
+function redact(text, secret) {
+    if (!secret)
+        return text;
+    return text.split(secret).join("***");
+}
+function oneLine(value, secret) {
+    if (typeof value !== "string")
+        return "";
+    const flat = redact(value, secret).replace(/\s+/g, " ").trim();
+    return flat.length > 300 ? `${flat.slice(0, 297)}...` : flat;
+}
+function field(obj, key) {
+    return obj && typeof obj === "object" ? obj[key] : undefined;
+}
+/** A server-supplied identifier, accepted only if it is a short plain token. */
+function safeCode(value) {
+    return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(value) ? value : undefined;
+}
+function errMessage(err) {
+    return err instanceof Error ? err.message : String(err);
+}
+
 ;// CONCATENATED MODULE: ./src/comment.ts
+
 
 /**
  * The hidden marker that makes the comment "sticky": on a re-run we find the
@@ -78644,7 +79020,7 @@ const TEASER_MAX_CHARS = 1400;
  *    fence, produced by slicing lines — never by extracting fields from it.
  *  - Positioning: "your team governs your agent fleet: approve, audit, prove."
  */
-function renderComment({ report, sessionUrl }) {
+function renderComment({ report, sessionUrl, publish }) {
     const chips = deriveChips(report.projection);
     const parts = [];
     parts.push(STICKY_MARKER);
@@ -78656,9 +79032,7 @@ function renderComment({ report, sessionUrl }) {
         "Machinaut to review exactly what the agent observed, believed, decided, and did — every " +
         "step linked back to the append-only event log.");
     parts.push("");
-    parts.push(`**[Open this session in Machinaut →](${withRef(sessionUrl)})**  ` +
-        "🔒 _Sign-in required — visible to team members already in your Machinaut org. " +
-        "This is the internal console, **not** a public post-mortem link._");
+    parts.push(...renderLinks(sessionUrl, publish));
     const teaser = buildTeaser(report.report_markdown);
     if (teaser) {
         parts.push("");
@@ -78677,6 +79051,38 @@ function renderComment({ report, sessionUrl }) {
     parts.push("---");
     parts.push(renderFooter());
     return parts.join("\n");
+}
+/**
+ * The link block. Three shapes, each labelled for what it is (candor #4):
+ *  - a public link was minted or reused → the public post-mortem first, with the
+ *    ADR-0002 decision-9 label (Beta, anyone with the link, expiry), then the
+ *    sign-in-walled console for the team;
+ *  - publishing was configured but did not produce a link → the console link as
+ *    before, plus one plain line saying why (ADR-0002 decision 20);
+ *  - no publish token (whatever the skip reason) → the console link exactly as
+ *    before the feature existed.
+ */
+function renderLinks(sessionUrl, publish) {
+    if (publish?.kind === "published") {
+        const expiry = formatExpiryDate(publish.expiresAt);
+        return [
+            `**[Open the public post-mortem →](${withRef(publish.url)})**  ` +
+                "🌐 _Public post-mortem link (Beta). Anyone with the link can view it. " +
+                `${expiry ? `Expires ${expiry} (UTC).` : "Machinaut did not report an expiry."}_`,
+            "",
+            `Your team can also [open this session in the Machinaut console](${withRef(sessionUrl)}) — ` +
+                "🔒 _sign-in required; visible to team members already in your Machinaut org._",
+        ];
+    }
+    const lines = [
+        `**[Open this session in Machinaut →](${withRef(sessionUrl)})**  ` +
+            "🔒 _Sign-in required — visible to team members already in your Machinaut org. " +
+            "This is the internal console, **not** a public post-mortem link._",
+    ];
+    const why = publish?.kind === "skipped" && publish.configured ? publishReasonText(publish.reason, publish.status) : undefined;
+    if (why)
+        lines.push("", `Public link not published: ${why}`);
+    return lines;
 }
 function renderChips(chips) {
     const bits = [
@@ -78838,6 +79244,42 @@ function headShaFromPayload(payload, contextSha, eventName) {
     return eventName !== undefined && CONTEXT_SHA_EVENTS.has(eventName) && contextSha ? contextSha : undefined;
 }
 /**
+ * Publishing (ADR-0002 decision 19): does this run's PR head come from a fork,
+ * judged from the payload alone?
+ *
+ * Unlike {@link isForkPullRequest} (which answers "can this run sign?"), this looks
+ * at EVERY event that carries the repos — `pull_request_target` and `workflow_run`
+ * included — because a public link must never be minted for a fork's PR, whatever
+ * credential the run happens to hold. That is what keeps the two unsupported
+ * patterns (`pull_request_target` over fork code, `workflow_run` over a fork's
+ * artifacts) from publishing even when the base repo's secrets are present.
+ *
+ * `true` = a fork (or a deleted head repo), `false` = the same repo, `undefined` =
+ * the payload cannot say (e.g. `issue_comment`, `push`): the caller asks the API
+ * or refuses to publish.
+ */
+function forkHeadFromPayload(payload) {
+    const pr = payload.pull_request;
+    if (pr) {
+        if (pr.head?.repo === null)
+            return true; // the fork was deleted
+        return headDiffersFromBase(pr.head?.repo?.full_name, pr.base?.repo?.full_name);
+    }
+    const run = payload.workflow_run;
+    if (run) {
+        if (run.head_repository === null)
+            return true;
+        return headDiffersFromBase(run.head_repository?.full_name, run.repository?.full_name);
+    }
+    return undefined;
+}
+/** `true` when the head repo is not the base repo; `undefined` when either name is missing. */
+function headDiffersFromBase(head, base) {
+    if (!head || !base)
+        return undefined;
+    return head.toLowerCase() !== base.toLowerCase();
+}
+/**
  * Whether this run is a `pull_request`-family event from a fork. GitHub withholds
  * repository secrets and OIDC tokens from such runs, so the gate cannot sign.
  * (`pull_request_target` runs in the base repo's context and is NOT restricted.)
@@ -78857,6 +79299,262 @@ function isForkPullRequest(payload, eventName) {
     if (!head || !base)
         return false;
     return head.toLowerCase() !== base.toLowerCase();
+}
+
+;// CONCATENATED MODULE: ./src/sticky.ts
+/**
+ * Find-or-update the single evidence comment on a PR, keyed by a hidden marker.
+ *
+ * Idempotency is an Increment-1 acceptance criterion: however many times CI
+ * re-runs on a PR, there must be exactly one evidence comment. We list the
+ * issue's comments, find the first whose body carries {@link STICKY_MARKER}, and
+ * UPDATE it; only when none exists do we CREATE one.
+ */
+async function upsertStickyComment(octokit, args) {
+    const { owner, repo, issueNumber, marker, body } = args;
+    const existing = await octokit.paginate(octokit.rest.issues.listComments, {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        per_page: 100,
+    });
+    // A marker comment planted by a DIFFERENT identity (a stray or adversarial one)
+    // can't be edited by our token — GitHub answers 403 — and a comment deleted
+    // between the list and the update answers 404. Either way it isn't ours to
+    // reuse: skip it and try the next marker comment; if none are editable, create
+    // our own. This keeps exactly one evidence comment even when someone else
+    // planted the marker, and never lets their comment block ours. Any OTHER error
+    // (rate limit, outage, oversized body) is a real failure and is re-thrown so it
+    // reaches run()'s comment-failed handler instead of being masked.
+    const markerComments = existing.filter((c) => typeof c.body === "string" && c.body.includes(marker));
+    for (const prior of markerComments) {
+        try {
+            const { data } = await octokit.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
+            return { id: data.id, html_url: data.html_url, action: "updated" };
+        }
+        catch (err) {
+            if (!isNotEditable(err))
+                throw err;
+            // not ours / already gone — fall through to the next candidate, then create
+        }
+    }
+    const { data } = await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body,
+    });
+    return { id: data.id, html_url: data.html_url, action: "created" };
+}
+/** Whether a failed comment update means "this comment isn't ours to edit" (403)
+ *  or "it's gone" (404) — a signal to move on / create — versus a real error
+ *  (rate limit, 5xx, 422 oversized body) that must surface. */
+function isNotEditable(err) {
+    const status = err?.status;
+    return status === 403 || status === 404;
+}
+
+;// CONCATENATED MODULE: ./src/commentRun.ts
+
+
+
+
+
+async function runComment(inputs, deps) {
+    const { core, context } = deps;
+    const skip = (reason, message) => {
+        core.setOutput("status", `skipped:${reason}`);
+        core.notice(`machinaut-pr-action skipped (${reason}): ${message}`);
+    };
+    const fail = (reason, message) => {
+        core.setOutput("status", `skipped:${reason}`);
+        if (inputs.failOnError) {
+            core.setFailed(`machinaut-pr-action: ${message}`);
+        }
+        else {
+            core.warning(`machinaut-pr-action (${reason}): ${message} — continuing (fail-on-error is false)`);
+        }
+    };
+    // A missing/empty result means nothing was shipped — the honest "not
+    // agent-authored" signal. Skip cleanly, never fail (plan D1: no false positives).
+    if (!inputs.sessionId) {
+        return skip("no-session", "no session id supplied — nothing was shipped for this run");
+    }
+    if (!inputs.apiKey)
+        return fail("no-api-key", "machinaut-api-key is required");
+    if (!inputs.projectId)
+        return fail("no-project-id", "project-id is required");
+    if (!inputs.githubToken)
+        return fail("no-github-token", "github-token is required to comment");
+    // The console deep link is honest to publish regardless of what happens next,
+    // so compute and surface it early as an output.
+    let sessionUrl;
+    try {
+        sessionUrl = buildSessionUrl(inputs.consoleUrl, inputs.projectId, inputs.sessionId);
+    }
+    catch (err) {
+        return fail("bad-console-url", commentRun_errMessage(err));
+    }
+    core.setOutput("session-url", sessionUrl);
+    const octokit = deps.octokit();
+    const { owner, repo } = context.repo;
+    // Resolve the PR to comment on: prefer the event payload, else find the PR the
+    // head SHA belongs to (covers push / workflow_run triggers).
+    let issueNumber;
+    try {
+        const resolved = await resolvePrNumber(octokit, context);
+        if (resolved === undefined) {
+            return skip("no-pr", "no pull request is associated with this run — nothing to comment on");
+        }
+        issueNumber = resolved;
+    }
+    catch (err) {
+        return fail("pr-lookup-failed", commentRun_errMessage(err));
+    }
+    // Read the session's projection + report markdown with the project key.
+    let report;
+    try {
+        report = await fetchSessionReport({
+            apiUrl: inputs.apiUrl,
+            apiKey: inputs.apiKey,
+            projectId: inputs.projectId,
+            sessionId: inputs.sessionId,
+        }, { fetch: deps.fetch });
+    }
+    catch (err) {
+        // A 404 for a supplied session id means there's no evidence to show (a race,
+        // a wrong id, or a foreign/tenant-scoped session) — skip rather than red-X.
+        if (err instanceof MachinautApiError && err.status === 404) {
+            return skip("session-not-found", `Machinaut has no session '${inputs.sessionId}' for project '${inputs.projectId}'`);
+        }
+        // 401/403 (bad or mis-scoped key) and everything else respect fail-on-error.
+        return fail("api-error", commentRun_errMessage(err));
+    }
+    // Public link (planned). Only after the report read succeeded, so a link is
+    // never minted for a run that posts no comment. Never throws, never fails the step.
+    const publish = await planAndPublish(inputs, deps, octokit, issueNumber);
+    core.setOutput("publish", publishOutput(publish));
+    core.setOutput("share-url", publish.kind === "published" ? publish.url : "");
+    const body = renderComment({ report, sessionUrl, publish });
+    try {
+        const result = await upsertStickyComment(octokit, {
+            owner,
+            repo,
+            issueNumber,
+            marker: STICKY_MARKER,
+            body,
+        });
+        core.setOutput("comment-id", String(result.id));
+        core.setOutput("comment-url", result.html_url);
+        core.setOutput("status", result.action);
+        core.info(`${result.action} evidence comment on ${owner}/${repo}#${issueNumber}: ${result.html_url}`);
+    }
+    catch (err) {
+        return fail("comment-failed", commentRun_errMessage(err));
+    }
+}
+/**
+ * Decide whether to publish, and do it. Order (ADR-0002 decisions 11, 19, 20):
+ *  1. the payload says the PR is from a fork → never publish (whatever token the run holds);
+ *  2. no publish token → nothing to do; the comment stays exactly as without the feature;
+ *  3. a token that is not a CI publish token (`mp_…`) → refuse locally, send nothing;
+ *  4. the payload cannot say whether it is a fork → ask the API; unsure → do not publish;
+ *  5. `POST /v1/publish/shares` → a public link, or a reason.
+ * Every outcome is logged; refusals and errors as a warning annotation. None fails the step.
+ */
+async function planAndPublish(inputs, deps, octokit, prNumber) {
+    const { core, context } = deps;
+    const token = inputs.publishToken;
+    const skipped = (reason, status) => ({
+        kind: "skipped",
+        reason,
+        configured: token !== "",
+        status,
+    });
+    const forkFromPayload = forkHeadFromPayload(context.payload);
+    if (forkFromPayload === true) {
+        if (token) {
+            core.notice("machinaut-pr-action publish skipped (fork): this pull request comes from a fork; the action never publishes " +
+                "a public link for fork pull requests. The comment links the sign-in-walled console.");
+        }
+        return skipped("fork");
+    }
+    if (!token) {
+        core.info("no machinaut-publish-token supplied — linking the sign-in-walled console (publish: skipped:no-token)");
+        return skipped("no-token");
+    }
+    const refuse = (state, detail) => {
+        core.warning(`machinaut-pr-action publish (${state.reason}): ${detail} — the comment links the sign-in-walled console ` +
+            "instead; the step is not failed for this");
+        return state;
+    };
+    if (!token.startsWith(PUBLISH_TOKEN_PREFIX)) {
+        return refuse(skipped("invalid-token"), publishReasonText("invalid-token"));
+    }
+    if (forkFromPayload === undefined) {
+        // e.g. issue_comment or push: the payload names no head repo. Ask GitHub.
+        let fork;
+        try {
+            const { data } = await octokit.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber });
+            fork = data.head.repo === null ? true : headDiffersFromBase(data.head.repo?.full_name, data.base.repo?.full_name);
+        }
+        catch (err) {
+            return refuse(skipped("fork-check-failed"), `could not read PR #${prNumber} to rule out a fork: ${commentRun_errMessage(err)}`);
+        }
+        if (fork === undefined) {
+            return refuse(skipped("fork-check-failed"), `PR #${prNumber} did not name its head and base repositories`);
+        }
+        if (fork) {
+            core.notice("machinaut-pr-action publish skipped (fork): this pull request comes from a fork; the action never publishes " +
+                "a public link for fork pull requests. The comment links the sign-in-walled console.");
+            return skipped("fork");
+        }
+    }
+    const res = await publishShare({
+        apiUrl: inputs.apiUrl,
+        publishToken: token,
+        projectId: inputs.projectId,
+        sessionId: inputs.sessionId,
+        subject: prSubject(context.serverUrl, context.repo.owner, context.repo.repo, prNumber),
+    }, { fetch: deps.fetch });
+    if (!res.ok)
+        return refuse(skipped(res.reason, res.status), res.message);
+    let url;
+    try {
+        url = buildShareUrl(inputs.consoleUrl, res.share.token);
+    }
+    catch (err) {
+        return refuse(skipped("bad-response"), `could not build the public link: ${commentRun_errMessage(err)}`);
+    }
+    core.info(`${res.reused ? "reused the live" : "published a"} public post-mortem link (beta): ${url}` +
+        `${res.share.expiresAt ? ` — expires ${res.share.expiresAt}` : ""}` +
+        `${res.share.replacedShareId ? ` — replaced this PR's previous link (${res.share.replacedShareId})` : ""}`);
+    return { kind: "published", reused: res.reused, url, expiresAt: res.share.expiresAt };
+}
+/** `${console}/projects/:p/sessions/:s`, matching the explorer route. */
+function buildSessionUrl(consoleUrl, projectId, sessionId) {
+    const base = normalizeBaseUrl(consoleUrl);
+    return `${base}/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`;
+}
+/**
+ * The PR number for this run: the event payload's PR (pull_request /
+ * pull_request_target / issue_comment / workflow_run), else the PR the head
+ * commit belongs to (push / merge_group). Returns undefined when there is
+ * genuinely no PR to comment on. Payload → target selection is the pure,
+ * unit-tested {@link prTargetFromPayload}.
+ */
+async function resolvePrNumber(octokit, ctx) {
+    const target = prTargetFromPayload(ctx.payload, ctx.sha, ctx.eventName);
+    if (typeof target.prNumber === "number")
+        return target.prNumber;
+    if (!target.sha)
+        return undefined;
+    // No `.catch` here: a lookup failure must reach run()'s `pr-lookup-failed`
+    // handler (and honour fail-on-error), not be flattened into a false "no-pr" skip.
+    return findPrNumberForSha(octokit, { owner: ctx.repo.owner, repo: ctx.repo.repo, sha: target.sha });
+}
+function commentRun_errMessage(err) {
+    return err instanceof Error ? err.message : String(err);
 }
 
 // EXTERNAL MODULE: external "node:crypto"
@@ -79276,7 +79974,7 @@ async function signStatement(statement, deps, opts) {
         });
     }
     catch (err) {
-        throw new SigningError(`Sigstore signing failed: ${errMessage(err)}`);
+        throw new SigningError(`Sigstore signing failed: ${signing_errMessage(err)}`);
     }
     const result = { bundle: attestation.bundle };
     // Who signed, as the certificate says — not as GITHUB_WORKFLOW_REF guesses: for a
@@ -79295,7 +79993,7 @@ async function signStatement(statement, deps, opts) {
     }
     catch (err) {
         const status = err?.status;
-        result.storeError = `${status ? `HTTP ${status}: ` : ""}${errMessage(err)}`;
+        result.storeError = `${status ? `HTTP ${status}: ` : ""}${signing_errMessage(err)}`;
     }
     return result;
 }
@@ -79312,7 +80010,7 @@ function githubStore(octokit, owner, repo) {
         return data?.id;
     };
 }
-function errMessage(err) {
+function signing_errMessage(err) {
     return err instanceof Error ? err.message : String(err);
 }
 
@@ -79544,97 +80242,6 @@ function code(s) {
  *  inside reasons), so a crafted id cannot inject links, HTML or formatting. */
 function escapeMd(s) {
     return s.replace(/[\\`*_{}[\]()<>#+!|~]/g, (c) => `\\${c}`);
-}
-
-;// CONCATENATED MODULE: ./src/machinaut.ts
-/** A non-2xx response from the API, carrying the status so the caller can decide
- *  whether it's fatal (401/403 — misconfigured credential) or skippable (404 —
- *  no such session for this project/tenant). */
-class MachinautApiError extends Error {
-    status;
-    code;
-    constructor(status, code, message) {
-        super(message);
-        this.status = status;
-        this.code = code;
-        this.name = "MachinautApiError";
-    }
-}
-/** Strip trailing slashes so `${base}/v1/...` never doubles up. */
-function normalizeBaseUrl(raw) {
-    const trimmed = raw.trim().replace(/\/+$/, "");
-    const u = new URL(trimmed); // throws on a non-absolute / invalid URL — surfaced by the caller
-    if (u.protocol !== "http:" && u.protocol !== "https:") {
-        throw new Error(`api-url must be an http(s) URL, got '${raw}'`);
-    }
-    return trimmed;
-}
-/**
- * Fetch a session's projection + report markdown with the project key.
- *
- * Uses `Authorization: Bearer <key>` (the machine-credential path in
- * `authenticate()`), `report=1` to opt into the display markdown, and a bounded
- * timeout so a hung control plane can't wedge the job. Path segments are
- * percent-encoded.
- */
-async function fetchSessionReport(opts, deps = {}) {
-    const path = `/v1/projects/${encodeURIComponent(opts.projectId)}/sessions/${encodeURIComponent(opts.sessionId)}?report=1`;
-    const { status, body } = await getJson({ apiUrl: opts.apiUrl, apiKey: opts.apiKey, path }, deps);
-    if (!body || typeof body !== "object" || !body.projection) {
-        throw new MachinautApiError(status, "unexpected_body", "Machinaut response had no projection");
-    }
-    return body;
-}
-/**
- * GET a read-only Machinaut route with the project key and parse the JSON body.
- * Shared by comment mode (`…/sessions/:s?report=1`) and gate mode
- * (`…/sessions/:s/governance`). Non-2xx → {@link MachinautApiError} carrying the
- * API's structured `{ error, message }` when present; network failure / timeout →
- * a status-0 error.
- */
-async function getJson(opts, deps = {}) {
-    const doFetch = deps.fetch ?? fetch;
-    const timeoutMs = deps.timeoutMs ?? 15_000;
-    const base = normalizeBaseUrl(opts.apiUrl);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let res;
-    try {
-        res = await doFetch(`${base}${opts.path}`, {
-            method: "GET",
-            headers: {
-                authorization: `Bearer ${opts.apiKey}`,
-                accept: "application/json",
-                "user-agent": "machinaut-pr-action",
-            },
-            signal: controller.signal,
-        });
-    }
-    catch (err) {
-        const reason = err instanceof Error && err.name === "AbortError" ? `timed out after ${timeoutMs}ms` : String(err);
-        throw new MachinautApiError(0, "network_error", `request to Machinaut failed: ${reason}`);
-    }
-    finally {
-        clearTimeout(timer);
-    }
-    if (!res.ok) {
-        // Try to surface the API's structured `{ error, message }` without depending on it.
-        let detail = "";
-        let code = `http_${res.status}`;
-        try {
-            const body = (await res.json());
-            if (body?.error)
-                code = body.error;
-            if (body?.message)
-                detail = ` — ${body.message}`;
-        }
-        catch {
-            /* non-JSON error body; the status alone is enough */
-        }
-        throw new MachinautApiError(res.status, code, `Machinaut returned ${res.status} (${code})${detail}`);
-    }
-    const body = (await res.json());
-    return { status: res.status, body };
 }
 
 ;// CONCATENATED MODULE: ./src/governance.ts
@@ -79930,9 +80537,9 @@ async function intake_submit(req, deps) {
     let raw = await attempt(BUNDLE_CONTENT_TYPE);
     if (raw.status === 415)
         raw = await attempt("application/json");
-    return classify(raw);
+    return intake_classify(raw);
 }
-function classify(raw) {
+function intake_classify(raw) {
     const { status } = raw;
     const code = errorCode(raw.body);
     if (raw.networkError !== undefined) {
@@ -79988,59 +80595,6 @@ function intakeState(r) {
         case "failed":
             return { kind: "failed", status: r.status };
     }
-}
-
-;// CONCATENATED MODULE: ./src/sticky.ts
-/**
- * Find-or-update the single evidence comment on a PR, keyed by a hidden marker.
- *
- * Idempotency is an Increment-1 acceptance criterion: however many times CI
- * re-runs on a PR, there must be exactly one evidence comment. We list the
- * issue's comments, find the first whose body carries {@link STICKY_MARKER}, and
- * UPDATE it; only when none exists do we CREATE one.
- */
-async function upsertStickyComment(octokit, args) {
-    const { owner, repo, issueNumber, marker, body } = args;
-    const existing = await octokit.paginate(octokit.rest.issues.listComments, {
-        owner,
-        repo,
-        issue_number: issueNumber,
-        per_page: 100,
-    });
-    // A marker comment planted by a DIFFERENT identity (a stray or adversarial one)
-    // can't be edited by our token — GitHub answers 403 — and a comment deleted
-    // between the list and the update answers 404. Either way it isn't ours to
-    // reuse: skip it and try the next marker comment; if none are editable, create
-    // our own. This keeps exactly one evidence comment even when someone else
-    // planted the marker, and never lets their comment block ours. Any OTHER error
-    // (rate limit, outage, oversized body) is a real failure and is re-thrown so it
-    // reaches run()'s comment-failed handler instead of being masked.
-    const markerComments = existing.filter((c) => typeof c.body === "string" && c.body.includes(marker));
-    for (const prior of markerComments) {
-        try {
-            const { data } = await octokit.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
-            return { id: data.id, html_url: data.html_url, action: "updated" };
-        }
-        catch (err) {
-            if (!isNotEditable(err))
-                throw err;
-            // not ours / already gone — fall through to the next candidate, then create
-        }
-    }
-    const { data } = await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: issueNumber,
-        body,
-    });
-    return { id: data.id, html_url: data.html_url, action: "created" };
-}
-/** Whether a failed comment update means "this comment isn't ours to edit" (403)
- *  or "it's gone" (404) — a signal to move on / create — versus a real error
- *  (rate limit, 5xx, 422 oversized body) that must surface. */
-function isNotEditable(err) {
-    const status = err?.status;
-    return status === 403 || status === 404;
 }
 
 ;// CONCATENATED MODULE: ./src/gateRun.ts
@@ -80376,6 +80930,12 @@ function parseSeverity(raw) {
 }
 /** Read and normalise the action inputs. `console-url` falls back to `api-url`. */
 function readInputs() {
+    // Mask the publish token first, before anything (even an input error) can
+    // print it. GitHub masks `secrets.*` values already; this also covers a token
+    // passed another way.
+    const publishToken = core.getInput("machinaut-publish-token").trim();
+    if (publishToken)
+        core.setSecret(publishToken);
     const apiUrl = core.getInput("api-url").trim() || "https://console.machinaut.ai";
     const consoleUrl = core.getInput("console-url").trim() || apiUrl;
     const mode = parseMode(core.getInput("mode"));
@@ -80404,6 +80964,7 @@ function readInputs() {
         },
         dryRun: gate ? parseBooleanInput("dry-run", core.getInput("dry-run"), false) : false,
         postAttestation: gate ? parseBooleanInput("post-attestation", core.getInput("post-attestation"), true) : true,
+        publishToken,
     };
 }
 
@@ -80414,22 +80975,20 @@ function readInputs() {
 
 
 
-
-
-
 /**
- * Increment 1 (plan §3): authenticate with the consumer's existing project key,
- * read `GET /v1/projects/:p/sessions/:s?report=1`, and post one sticky comment
- * carrying the agent's evidence teaser + a login-walled console deep link.
- *
- * The trigger is "a Lodestar session was shipped for this PR" — signalled by a
- * non-empty `session-id` input (plan D1/D2). No session → clean no-op.
+ * Entrypoint: read the inputs and run the selected mode. Comment mode (the
+ * default) lives in `commentRun.ts`; gate mode (beta, Track G G1) in `gateRun.ts`.
+ * Both take their GitHub/Actions dependencies injected, so they are unit-tested
+ * without this module's import-time side effect.
  */
 async function run() {
     const inputs = readInputs();
     // Gate mode (beta, Track G G1) is opt-in; the default `mode: comment` below is
-    // Increment 1, unchanged.
+    // Increment 1 (plus the planned public link), unchanged by gate mode.
     if (inputs.mode === "gate") {
+        if (inputs.publishToken) {
+            core.notice("machinaut-publish-token is used in comment mode only; gate mode does not publish a public link");
+        }
         await runGate(inputs, {
             core: core,
             context: github.context,
@@ -80439,114 +80998,11 @@ async function run() {
         });
         return;
     }
-    // A missing/empty result means nothing was shipped — the honest "not
-    // agent-authored" signal. Skip cleanly, never fail (plan D1: no false positives).
-    if (!inputs.sessionId) {
-        return skip("no-session", "no session id supplied — nothing was shipped for this run");
-    }
-    if (!inputs.apiKey)
-        return fail(inputs.failOnError, "no-api-key", "machinaut-api-key is required");
-    if (!inputs.projectId)
-        return fail(inputs.failOnError, "no-project-id", "project-id is required");
-    if (!inputs.githubToken)
-        return fail(inputs.failOnError, "no-github-token", "github-token is required to comment");
-    // The console deep link is honest to publish regardless of what happens next,
-    // so compute and surface it early as an output.
-    let sessionUrl;
-    try {
-        sessionUrl = buildSessionUrl(inputs.consoleUrl, inputs.projectId, inputs.sessionId);
-    }
-    catch (err) {
-        return fail(inputs.failOnError, "bad-console-url", main_errMessage(err));
-    }
-    core.setOutput("session-url", sessionUrl);
-    const octokit = github.getOctokit(inputs.githubToken);
-    const { owner, repo } = github.context.repo;
-    // Resolve the PR to comment on: prefer the event payload, else find the PR the
-    // head SHA belongs to (covers push / workflow_run triggers).
-    let issueNumber;
-    try {
-        const resolved = await resolvePrNumber(octokit);
-        if (resolved === undefined) {
-            return skip("no-pr", "no pull request is associated with this run — nothing to comment on");
-        }
-        issueNumber = resolved;
-    }
-    catch (err) {
-        return fail(inputs.failOnError, "pr-lookup-failed", main_errMessage(err));
-    }
-    // Read the session's projection + report markdown with the project key.
-    let report;
-    try {
-        report = await fetchSessionReport({
-            apiUrl: inputs.apiUrl,
-            apiKey: inputs.apiKey,
-            projectId: inputs.projectId,
-            sessionId: inputs.sessionId,
-        });
-    }
-    catch (err) {
-        // A 404 for a supplied session id means there's no evidence to show (a race,
-        // a wrong id, or a foreign/tenant-scoped session) — skip rather than red-X.
-        if (err instanceof MachinautApiError && err.status === 404) {
-            return skip("session-not-found", `Machinaut has no session '${inputs.sessionId}' for project '${inputs.projectId}'`);
-        }
-        // 401/403 (bad or mis-scoped key) and everything else respect fail-on-error.
-        return fail(inputs.failOnError, "api-error", main_errMessage(err));
-    }
-    const body = renderComment({ report, sessionUrl });
-    try {
-        const result = await upsertStickyComment(octokit, {
-            owner,
-            repo,
-            issueNumber,
-            marker: STICKY_MARKER,
-            body,
-        });
-        core.setOutput("comment-id", String(result.id));
-        core.setOutput("comment-url", result.html_url);
-        core.setOutput("status", result.action);
-        core.info(`${result.action} evidence comment on ${owner}/${repo}#${issueNumber}: ${result.html_url}`);
-    }
-    catch (err) {
-        return fail(inputs.failOnError, "comment-failed", main_errMessage(err));
-    }
-}
-/** `${console}/projects/:p/sessions/:s`, matching the explorer route. */
-function buildSessionUrl(consoleUrl, projectId, sessionId) {
-    const base = normalizeBaseUrl(consoleUrl);
-    return `${base}/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`;
-}
-/**
- * The PR number for this run: the event payload's PR (pull_request /
- * pull_request_target / issue_comment / workflow_run), else the PR the head
- * commit belongs to (push / merge_group). Returns undefined when there is
- * genuinely no PR to comment on. Payload → target selection is the pure,
- * unit-tested {@link prTargetFromPayload}.
- */
-async function resolvePrNumber(octokit) {
-    const ctx = github.context;
-    const target = prTargetFromPayload(ctx.payload, ctx.sha, ctx.eventName);
-    if (typeof target.prNumber === "number")
-        return target.prNumber;
-    if (!target.sha)
-        return undefined;
-    // No `.catch` here: a lookup failure must reach run()'s `pr-lookup-failed`
-    // handler (and honour fail-on-error), not be flattened into a false "no-pr" skip.
-    return findPrNumberForSha(octokit, { owner: ctx.repo.owner, repo: ctx.repo.repo, sha: target.sha });
-}
-function skip(reason, message) {
-    core.setOutput("status", `skipped:${reason}`);
-    core.notice(`machinaut-pr-action skipped (${reason}): ${message}`);
-}
-function fail(failOnError, reason, message) {
-    core.setOutput("status", `skipped:${reason}`);
-    if (failOnError) {
-        core.setFailed(`machinaut-pr-action: ${message}`);
-    }
-    else {
-        core.warning(`machinaut-pr-action (${reason}): ${message} — continuing (fail-on-error is false)`);
-    }
+    await runComment(inputs, {
+        core: core,
+        context: github.context,
+        octokit: () => github.getOctokit(inputs.githubToken),
+    });
 }
 function main_errMessage(err) {
     return err instanceof Error ? err.message : String(err);
@@ -80557,8 +81013,7 @@ run().catch((err) => {
     core.setFailed(`machinaut-pr-action: unexpected error: ${main_errMessage(err)}`);
 });
 
-var __webpack_exports__buildSessionUrl = __webpack_exports__._;
 var __webpack_exports__run = __webpack_exports__.e;
-export { __webpack_exports__buildSessionUrl as buildSessionUrl, __webpack_exports__run as run };
+export { __webpack_exports__run as run };
 
 //# sourceMappingURL=index.js.map

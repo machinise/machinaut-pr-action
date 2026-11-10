@@ -13,6 +13,11 @@ signed by the repo's own CI.
 > **[Gate mode](#gate-mode-beta) — beta, released in `v2.0.0` (floating tag `v2`):** evaluate a run's governance
 > facts against your policy, sign the decision with your CI's Sigstore identity, and fail a
 > required check. First live run: see [below](#first-live-run-2026-11-06).
+>
+> **[Public post-mortem link](#public-post-mortem-link-planned) — planned, not yet deployed:** an
+> optional, separate CI publish token lets comment mode link a public, expiring post-mortem
+> instead of the console. The action side is implemented and unit-tested against the
+> control-plane contract; the hosted console does not serve the publish endpoint yet.
 
 ## What it does
 
@@ -23,12 +28,16 @@ agent's evidence trail:
 - headline chips derived from the session's structured projection — **events · agents · verdict · wall-clock**;
 - a short **report preview**, quoted *verbatim* from the Lodestar report (never parsed as data);
 - a **deep link** to the Machinaut console session, honestly labeled as **login-walled** (team
-  members already in your org) — **not** a public post-mortem.
+  members already in your org) — **not** a public post-mortem;
+- **planned:** with the optional `machinaut-publish-token`, a **public, expiring post-mortem
+  link** leads the comment ([below](#public-post-mortem-link-planned)).
 
-The action is a **read-only API client**. In comment mode it calls exactly one endpoint,
-`GET /v1/projects/:p/sessions/:s?report=1`, with your existing project key (gate mode calls
-`GET …/sessions/:s/governance` instead). It never runs the agent writer, and it holds no secrets of
-its own (you supply your Machinaut credential as a repo secret). See [Invariants](#invariants).
+With your project key the action is a **read-only API client**: comment mode calls exactly one
+endpoint, `GET /v1/projects/:p/sessions/:s?report=1` (gate mode calls
+`GET …/sessions/:s/governance` instead). Its only write is the planned public link: with the
+separate publish token, comment mode also calls `POST /v1/publish/shares` once. It never runs the
+agent writer, and it holds no secrets of its own (you supply your Machinaut credentials as repo
+secrets). See [Invariants](#invariants).
 
 ## Usage
 
@@ -68,6 +77,7 @@ no-ops — no heuristic, no false positives.
 | `github-token` | no | `${{ github.token }}` | Token used to post/update the comment. |
 | `fail-on-error` | no | `false` | When `false`, problems log a warning and exit 0 so a non-critical evidence comment never red-Xes a PR. (Gate mode defaults to `true` — see [Gate mode](#gate-mode-beta).) |
 | `mode` | no | `comment` | `comment` (this section) or `gate` ([beta](#gate-mode-beta)). |
+| `machinaut-publish-token` | no | — | **Planned.** A separate CI publish token (`mp_…`, a repo secret) that mints a public, expiring post-mortem link. See [Public post-mortem link](#public-post-mortem-link-planned). |
 
 ### Outputs
 
@@ -77,6 +87,8 @@ no-ops — no heuristic, no false positives.
 | `comment-url` | `html_url` of the sticky comment (empty if skipped). |
 | `session-url` | The console deep link to the session. |
 | `status` | `created`, `updated`, or `skipped:<reason>`. |
+| `share-url` | **Planned.** The public post-mortem URL, when the publish token minted or reused one (empty otherwise). |
+| `publish` | **Planned.** `published`, `reused`, or `skipped:<reason>` — see [Publish outputs](#publish-outputs). |
 
 ## Gate mode (beta)
 
@@ -309,18 +321,87 @@ not a bug. Gate mode remains **beta**.
 - GitHub enforces the required check (branch protection is yours); Machinaut cannot block a merge
   and never claims to.
 
-## Why the link is login-walled (and a public share, planned)
+## Public post-mortem link (planned)
 
-Machinaut deliberately forbids a **machine** credential from minting a **public** share — the
-posture that "a leaked ingest key can't publish to the internet." So today the comment links to the
-login-walled console session, honestly labeled. This still drives real adoption: a PR's reviewers
-are the exact devs already in your tenant.
+> **Status: planned.** The action side is implemented and unit-tested against the control-plane
+> contract, but the hosted console does not serve `POST /v1/publish/shares` yet, and the console
+> screen that mints publish tokens is not released. Until it is, leave `machinaut-publish-token`
+> unset: the comment links the sign-in-walled console exactly as before.
 
-- **Today (shipped):** read `GET …/sessions/:s?report=1` with the project
-  key → post the sticky comment with a verdict teaser + console deep link.
-- **Later (planned):** once the control plane grows a CI-scoped, mint-only *publish token*,
-  swap the console link for a real public `/s/:token` share so an unauthenticated onlooker can
-  click through. That needs a backend change first.
+Machinaut deliberately forbids a **project key** from minting a **public** share — the posture that
+"a leaked ingest key can't publish to the internet." That stays true. Publishing uses a **separate
+CI publish token** (`mp_…`) that an org owner mints for one project (planned console screen:
+Settings → API Tokens → CI publish tokens). Its only power is to create a time-limited public share
+of a recent, low-sensitivity session in that project; it cannot read, ingest, relay approvals or
+post attestations.
+
+```yaml
+      - uses: machinise/machinaut-pr-action@v2
+        with:
+          machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
+          machinaut-publish-token: ${{ secrets.MACHINAUT_PUBLISH_TOKEN }}   # planned
+          project-id: your-project-id
+          session-id: ${{ steps.ship.outputs.session-id }}
+```
+
+With the token set, comment mode first reads the session with the project key as usual, then calls
+`POST {api-url}/v1/publish/shares` with `{ project_id, session_id, subject }`, where `subject` is
+`github.com/<owner>/<repo>/pull/<n>`. The sticky comment then leads with the public `/s/:token` link,
+labelled *"Public post-mortem link (Beta). Anyone with the link can view it. Expires `<date>`."*,
+and keeps the console deep link below it for your team.
+
+- **Machinaut enforces the rules, not the action.** It publishes only a session whose recorded
+  sensitivity ceiling is at or below the token's (default `public`; an owner may choose `internal`)
+  and that was first shipped within the token's freshness window (default 72 hours). Links expire
+  (default 30 days). A PR has at most one live CI link: a re-run reuses it, and a new session on the
+  same PR replaces it.
+- **Ship with `--sensitivity-ceiling public`.** `lodestar ship` defaults to `internal`, so a default
+  token refuses a session shipped with the defaults; the comment says so and names the fix.
+- **What becomes public** is the session as shipped. Payloads above the ceiling were withheld by the
+  Lodestar shipper in your environment, but envelope structure always ships: actor ids, event types,
+  timestamps, causal links and payload-hash commitments are public on every share. If agent or tool
+  names are sensitive in a project, don't mint a publish token for it.
+- **No label is sent.** A share label is shown publicly as the page title, so the action sends none.
+- **A publish problem never fails the step.** If the token is unset, the run is for a fork's PR, or
+  Machinaut refuses or errors (401, 402, 403, 404, 409, 429, 5xx, network), the comment links the
+  console as before, the `publish` output says `skipped:<reason>`, and — when the token is set — the
+  comment adds one line saying why and the log gets a warning. `fail-on-error` does not apply to
+  publishing. With the token unset the comment is byte-for-byte what it was before this feature.
+- **The token is masked** in the log as soon as it is read, and is sent only to
+  `POST /v1/publish/shares`. A value without the `mp_` prefix (for example a project key pasted by
+  mistake) is refused locally and never sent.
+- **Gate mode does not publish**; it ignores the input.
+
+### Forks and triggers
+
+- **Forks never publish.** The action refuses to publish for any PR whose head repository is not
+  the base repository, on every event: `pull_request`, `pull_request_target`, `workflow_run`, and
+  `issue_comment` (checked through the GitHub API; if that check fails, nothing is published). On a
+  `pull_request` from a fork, GitHub passes no secrets anyway.
+- **Run it on `pull_request`.** Do **not** use `pull_request_target` with a checkout of the fork's
+  code: it runs with your secrets — the classic "pwn request". Do **not** publish from a
+  `workflow_run` that takes a session id from an artifact a fork produced: that id is
+  attacker-controlled.
+- **Contain the token.** Pin it to a project that only CI ships into, and consider a GitHub
+  environment secret with protection rules: anyone who can run a workflow holding the secret can
+  publish any eligible session of that project. Revoking the token in the console revokes its live
+  links by default.
+
+### Publish outputs
+
+| `publish` | Meaning |
+|---|---|
+| `published` / `reused` | A public link was minted (HTTP 201), or this token's live link for the session was returned (200). `share-url` holds it. |
+| `skipped:no-token` | No `machinaut-publish-token`; the comment is unchanged. |
+| `skipped:fork` | The PR comes from a fork; never published. |
+| `skipped:fork-check-failed` | The event payload did not name the PR's repositories and the GitHub lookup failed. |
+| `skipped:invalid-token` | The input is not a CI publish token (`mp_…`); nothing was sent. |
+| `skipped:ceiling-above-token`, `skipped:ceiling-unknown`, `skipped:session-too-old`, `skipped:not-publishable` | Machinaut's publish gate refused the session (409). |
+| `skipped:unauthorized`, `skipped:quota-exceeded`, `skipped:project-scope-conflict`, `skipped:not-found`, `skipped:rate-limited`, `skipped:bad-request` | 401 (unknown or revoked token), 402 (share quota), 403 (token pinned to another project), 404 (no such session in the token's project, or no publish endpoint on this console), 429, 400. |
+| `skipped:api-error`, `skipped:network-error`, `skipped:bad-response` | Any other status, Machinaut unreachable, or a success body without a usable share. |
+
+`publish` is empty when the action stopped before publishing (no session, a failed report read,
+and so on — `status` says why). The step never mints a link for a run that posts no comment.
 
 ## Versioning
 
@@ -362,12 +443,16 @@ and commit after changing source.
 ## Invariants (from Machinaut `CLAUDE.md`)
 
 - **Candor:** label shipped / beta / planned honestly; the console link is named
-  as login-walled, not sold as a public post-mortem.
+  as login-walled, not sold as a public post-mortem; the public link (planned) is labelled
+  Beta, public to anyone with the link, and expiring.
 - **Never claim an OSS feature as Machinaut's:** the chain / report / projection are Lodestar
   OSS ([`@qmilab/lodestar-trace`](https://github.com/qmilab/lodestar), Apache-2.0); Machinaut
   adds hosting, the public link, and tenancy.
 - **Never parse `renderReport` markdown as data:** the preview is a verbatim quote only.
-- **Never host the writer:** this action is a read-only API client.
+- **Never host the writer:** this action is an API client. It reads with the project key; its only
+  write is the planned public-link mint, made with the separate publish token.
+- **A project key never publishes:** public links need the owner-minted CI publish token, and the
+  action never publishes for a fork's PR.
 - **Machinaut never signs and never decides (gate mode):** the facts come from Machinaut; the
   decision is computed in your CI and signed with your CI's identity. No managed signing.
 - **Predicate privacy:** digests / ids / counts / outcomes only — no payloads, prompts or reasons.
