@@ -24,7 +24,7 @@ type SkippedPublish = Extract<PublishState, { kind: "skipped" }>
  * read `GET /v1/projects/:p/sessions/:s?report=1`, and post one sticky comment
  * carrying the agent's evidence teaser + a login-walled console deep link.
  *
- * Increment 2 (ADR-0002 — planned): when the separate CI publish token is
+ * Increment 2 (ADR-0002 — beta): when the separate CI publish token is
  * supplied and the PR is not from a fork, also mint (or reuse) a public,
  * expiring `/s/:token` link and lead the comment with it. Any publish problem
  * degrades to the Increment 1 link plus a one-line reason; it never fails the step.
@@ -129,7 +129,7 @@ export async function runComment(inputs: Inputs, deps: CommentDeps): Promise<voi
     return fail("api-error", errMessage(err))
   }
 
-  // Public link (planned). Only after the report read succeeded, so a link is
+  // Public link (beta). Only after the report read succeeded, so a link is
   // never minted for a run that posts no comment. Never throws, never fails the step.
   const publish = await planAndPublish(inputs, deps, octokit, issueNumber)
   core.setOutput("publish", publishOutput(publish))

@@ -5,11 +5,11 @@ Notable changes to this action. Format follows
 [SemVer](https://semver.org/). Consumers should pin the moving major alias
 (`@v1`), which the release workflow re-points at each `v1.x.y` release.
 
-## Unreleased
+## 2.1.0 — 2026-11-11
 
 ### Added
 
-- **Public post-mortem link (planned; the control-plane endpoint is not deployed yet).** New
+- **Public post-mortem link (beta; the hosted console serves it from v0.7.0; verified live 2026-11-11).** New
   optional input `machinaut-publish-token`: a separate, owner-minted CI publish token (`mp_…`).
   When set, comment mode calls `POST /v1/publish/shares` with `{ project_id, session_id, subject }`
   (subject `github.com/<owner>/<repo>/pull/<n>`; no label, because a label is public), and leads the

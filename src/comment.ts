@@ -37,7 +37,7 @@ export interface RenderInput {
   /** Console deep link to the session (login-walled). */
   sessionUrl: string
   /**
-   * Public post-mortem link (planned, ADR-0002). Absent, or skipped with
+   * Public post-mortem link (beta, ADR-0002). Absent, or skipped with
    * `configured: false`, renders exactly the comment this action posted before
    * the feature.
    */

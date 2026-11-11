@@ -2,7 +2,7 @@ import { normalizeBaseUrl } from "./machinaut"
 
 /**
  * Public post-mortem link (Track C Increment 2, ADR-0002 in the control-plane
- * repo — PLANNED until the hosted console serves it).
+ * repo — BETA; the hosted console serves it from v0.7.0).
  *
  * With the separate, owner-minted CI publish token (`mp_…`), comment mode asks
  * Machinaut to mint — or hand back — a public, expiring `/s/:token` share of the
@@ -308,7 +308,7 @@ export function publishReasonText(reason: PublishSkipReason, status?: number): s
     case "project-scope-conflict":
       return "the publish token is pinned to a different Machinaut project than `project-id`."
     case "not-found":
-      return "Machinaut answered 404: the session is not in the publish token's project, or this console does not serve CI publishing yet."
+      return "Machinaut answered 404: the session is not in the publish token's project, or this control plane does not serve CI publishing (the hosted console does from v0.7.0)."
     case "ceiling-above-token":
       return "this session was shipped above the publish token's sensitivity ceiling — ship with `--sensitivity-ceiling public`, or have an owner mint an `internal`-ceiling publish token."
     case "ceiling-unknown":
