@@ -1,0 +1,123 @@
+# LIVE TEST ONLY (do not merge). Track C Increment 2: the public post-mortem link,
+# end to end against the hosted console.
+#
+# On a same-repo pull request this job:
+#   1. writes one small synthetic session with the Lodestar OSS event-log writer
+#      (on this runner, the way an agent's host would) and ships it into project
+#      `demo` with the real `lodestar ship --sensitivity-ceiling public`;
+#   2. runs THIS checkout's action (`uses: ./`) in comment mode with the CI publish
+#      token, so the sticky comment leads with a public `/s/<token>` link;
+#   3. prints the action's outputs and fails if no public link came back.
+#
+# Everything shipped is harmless, synthetic and labelled as a test: the share page
+# is public. The session id carries the run id, so every run is a fresh session
+# (inside the token's 72 h freshness window).
+name: Live publish run (test)
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: live-publish-run-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  live-publish:
+    # Same-repo PRs only: a fork PR gets no secrets, and the action never
+    # publishes for one anyway.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CONSOLE_URL: https://console.machinaut.ai
+      PROJECT_ID: demo
+      SESSION_ID: sess-live-publish-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `runner.temp` is not available in job-level env, so the log root is set here.
+      - name: Choose a fresh event-log root
+        run: echo "LOG_ROOT=$RUNNER_TEMP/lodestar-events" >> "$GITHUB_ENV"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install the Lodestar OSS writer and shipper (0.6.0, from npm)
+        working-directory: .github/live-test
+        run: bun install --frozen-lockfile
+
+      - name: Write a synthetic test session (OSS event-log writer)
+        working-directory: .github/live-test
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bun run write-session.ts
+
+      - name: Dry run — what will be made public
+        working-directory: .github/live-test
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/lodestar ship "$SESSION_ID" --project "$PROJECT_ID" --log-root "$LOG_ROOT" \
+            --sensitivity-ceiling public --out "$RUNNER_TEMP/ship.ndjson"
+          head -n 1 "$RUNNER_TEMP/ship.ndjson"
+          tail -n +2 "$RUNNER_TEMP/ship.ndjson" | jq -c '{seq: .envelope.seq, type: .envelope.type, redacted}'
+          test "$(head -n 1 "$RUNNER_TEMP/ship.ndjson" | jq -r .ceiling)" = public
+
+      - name: Ship it to Machinaut at the public ceiling (lodestar ship)
+        working-directory: .github/live-test
+        env:
+          LODESTAR_SHIP_TOKEN: ${{ secrets.MACHINAUT_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$LODESTAR_SHIP_TOKEN" ]; then
+            echo "::error::the MACHINAUT_API_KEY secret is not set"
+            exit 1
+          fi
+          ./node_modules/.bin/lodestar ship "$SESSION_ID" --project "$PROJECT_ID" --log-root "$LOG_ROOT" \
+            --sensitivity-ceiling public --token-env LODESTAR_SHIP_TOKEN --endpoint "$CONSOLE_URL"
+
+      - id: evidence
+        name: Machinaut PR evidence comment (this checkout, comment mode, publish token)
+        uses: ./
+        with:
+          machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
+          machinaut-publish-token: ${{ secrets.MACHINAUT_PUBLISH_TOKEN }}
+          project-id: ${{ env.PROJECT_ID }}
+          session-id: ${{ env.SESSION_ID }}
+          api-url: ${{ env.CONSOLE_URL }}
+          fail-on-error: 'true'
+
+      - name: Print the action's outputs
+        env:
+          STATUS: ${{ steps.evidence.outputs.status }}
+          PUBLISH: ${{ steps.evidence.outputs.publish }}
+          SHARE_URL: ${{ steps.evidence.outputs.share-url }}
+          SESSION_URL: ${{ steps.evidence.outputs.session-url }}
+          COMMENT_URL: ${{ steps.evidence.outputs.comment-url }}
+        run: |
+          echo "session-id=$SESSION_ID"
+          echo "status=$STATUS"
+          echo "publish=$PUBLISH"
+          echo "share-url=$SHARE_URL"
+          echo "session-url=$SESSION_URL"
+          echo "comment-url=$COMMENT_URL"
+
+      - name: Require a public link
+        env:
+          PUBLISH: ${{ steps.evidence.outputs.publish }}
+          SHARE_URL: ${{ steps.evidence.outputs.share-url }}
+        run: |
+          case "$PUBLISH" in
+            published|reused) ;;
+            *) echo "::error::no public link: publish=$PUBLISH (the action's warning above says why)"; exit 1 ;;
+          esac
+          if ! printf '%s' "$SHARE_URL" | grep -Eq "^${CONSOLE_URL}/s/sh_[A-Za-z0-9_-]+$"; then
+            echo "::error::unexpected share-url '$SHARE_URL'"
+            exit 1
+          fi

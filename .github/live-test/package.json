@@ -1,0 +1,11 @@
+{
+  "name": "machinaut-pr-action-live-test",
+  "version": "0.0.0",
+  "private": true,
+  "description": "LIVE TEST ONLY (do not merge): the Lodestar OSS writer + shipper the live publish run uses on the runner, pinned to 0.6.0.",
+  "type": "module",
+  "dependencies": {
+    "@qmilab/lodestar-cli": "0.6.0",
+    "@qmilab/lodestar-event-log": "0.6.0"
+  }
+}
