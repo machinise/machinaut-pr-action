@@ -101,7 +101,7 @@ describe("readInputs", () => {
   })
 })
 
-describe("readInputs — machinaut-publish-token (planned)", () => {
+describe("readInputs — machinaut-publish-token (beta)", () => {
   it("is empty and masks nothing when not supplied", () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
     try {

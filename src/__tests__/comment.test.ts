@@ -166,7 +166,7 @@ describe("funnel links (issue 15)", () => {
   })
 })
 
-describe("renderComment — public post-mortem link (planned, ADR-0002)", () => {
+describe("renderComment — public post-mortem link (beta, ADR-0002)", () => {
   const SHARE_URL = "https://console.machinaut.ai/s/sh_AbCdEfGhIjKlMnOpQrStUvWxYz012345"
   const plain = renderComment({ report, sessionUrl: SESSION_URL })
 

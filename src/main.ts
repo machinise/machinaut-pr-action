@@ -15,7 +15,7 @@ export async function run(): Promise<void> {
   const inputs = readInputs()
 
   // Gate mode (beta, Track G G1) is opt-in; the default `mode: comment` below is
-  // Increment 1 (plus the planned public link), unchanged by gate mode.
+  // Increment 1 (plus the beta public link), unchanged by gate mode.
   if (inputs.mode === "gate") {
     if (inputs.publishToken) {
       core.notice("machinaut-publish-token is used in comment mode only; gate mode does not publish a public link")

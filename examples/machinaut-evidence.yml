@@ -47,15 +47,15 @@ jobs:
 
       # 2) Post the evidence comment. On runs where nothing shipped,
       #    session-id is empty and the action cleanly no-ops.
-      - uses: machinise/machinaut-pr-action@v1
+      - uses: machinise/machinaut-pr-action@v2
         with:
           machinaut-api-key: ${{ secrets.MACHINAUT_API_KEY }}
           project-id: your-project-id
           session-id: ${{ steps.ship.outputs.session-id }}
           # api-url: https://console.machinaut.ai   # self-hosted? point at your control plane
 
-          # PLANNED (not yet on the hosted console; needs a v2 release that
-          # includes it): a public, expiring post-mortem link. This is a
+          # BETA (v2.1.0 or later, hosted console v0.7.0 or later): a public,
+          # expiring post-mortem link. This is a
           # separate, owner-minted CI publish token, not your project key, which
           # cannot mint a public share. Ship with `--sensitivity-ceiling public`
           # for a default token to accept the session. Fork PRs never publish,

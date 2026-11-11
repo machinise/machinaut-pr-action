@@ -78698,7 +78698,7 @@ async function getJson(opts, deps = {}) {
 
 /**
  * Public post-mortem link (Track C Increment 2, ADR-0002 in the control-plane
- * repo — PLANNED until the hosted console serves it).
+ * repo — BETA; the hosted console serves it from v0.7.0).
  *
  * With the separate, owner-minted CI publish token (`mp_…`), comment mode asks
  * Machinaut to mint — or hand back — a public, expiring `/s/:token` share of the
@@ -78937,7 +78937,7 @@ function publishReasonText(reason, status) {
         case "project-scope-conflict":
             return "the publish token is pinned to a different Machinaut project than `project-id`.";
         case "not-found":
-            return "Machinaut answered 404: the session is not in the publish token's project, or this console does not serve CI publishing yet.";
+            return "Machinaut answered 404: the session is not in the publish token's project, or this control plane does not serve CI publishing (the hosted console does from v0.7.0).";
         case "ceiling-above-token":
             return "this session was shipped above the publish token's sensitivity ceiling — ship with `--sensitivity-ceiling public`, or have an owner mint an `internal`-ceiling publish token.";
         case "ceiling-unknown":
@@ -79436,7 +79436,7 @@ async function runComment(inputs, deps) {
         // 401/403 (bad or mis-scoped key) and everything else respect fail-on-error.
         return fail("api-error", commentRun_errMessage(err));
     }
-    // Public link (planned). Only after the report read succeeded, so a link is
+    // Public link (beta). Only after the report read succeeded, so a link is
     // never minted for a run that posts no comment. Never throws, never fails the step.
     const publish = await planAndPublish(inputs, deps, octokit, issueNumber);
     core.setOutput("publish", publishOutput(publish));
@@ -79685,7 +79685,7 @@ function pushCapped(into, items, overflow) {
  * `gate.action` (plan §2.2). Bump it in the same commit that prepares a release:
  * the release workflow refuses to alias a tag whose version does not match.
  */
-const ACTION_VERSION = "2.0.2";
+const ACTION_VERSION = "2.1.0";
 const ACTION_REPOSITORY = "machinise/machinaut-pr-action";
 const ACTION_REF = `${ACTION_REPOSITORY}@v${ACTION_VERSION}`;
 
@@ -81001,7 +81001,7 @@ function readInputs() {
 async function run() {
     const inputs = readInputs();
     // Gate mode (beta, Track G G1) is opt-in; the default `mode: comment` below is
-    // Increment 1 (plus the planned public link), unchanged by gate mode.
+    // Increment 1 (plus the beta public link), unchanged by gate mode.
     if (inputs.mode === "gate") {
         if (inputs.publishToken) {
             core.notice("machinaut-publish-token is used in comment mode only; gate mode does not publish a public link");

@@ -36,7 +36,7 @@ export interface Inputs {
   /** Gate-mode only: POST the signed bundle to Machinaut's attestation intake. Default true. */
   postAttestation: boolean
   /**
-   * Comment mode, planned (ADR-0002): the optional CI publish token (`mp_…`) that
+   * Comment mode, beta (ADR-0002): the optional CI publish token (`mp_…`) that
    * mints the public post-mortem link. '' when not supplied. Masked in the log as
    * soon as it is read.
    */
